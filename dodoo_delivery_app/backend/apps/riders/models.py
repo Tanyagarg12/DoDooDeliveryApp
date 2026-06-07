@@ -13,13 +13,13 @@ class Rider(AbstractUser):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     phone = models.CharField(max_length=15, unique=True)
-    profile_picture = models.ImageField(upload_to='rider_profiles/', null=True, blank=True)
+    profile_picture = models.FileField(upload_to='rider_profiles/', null=True, blank=True)
     address = models.TextField(null=True, blank=True)
     driving_license_number = models.CharField(max_length=50, unique=True)
-    driving_license_image = models.ImageField(upload_to='driving_licenses/')
+    driving_license_image = models.FileField(upload_to='driving_licenses/', null=True, blank=True)
     aadhar_number = models.CharField(max_length=12, unique=True)
-    aadhar_front = models.ImageField(upload_to='aadhar_front/')
-    aadhar_back = models.ImageField(upload_to='aadhar_back/')
+    aadhar_front = models.FileField(upload_to='aadhar_front/', null=True, blank=True)
+    aadhar_back = models.FileField(upload_to='aadhar_back/', null=True, blank=True)
     
     current_status = models.CharField(max_length=20, choices=RIDER_STATUS_CHOICES, default='offline')
     current_latitude = models.FloatField(null=True, blank=True)

@@ -73,6 +73,29 @@ class Order(models.Model):
         return float(self.minimum_fare)
 
 
+class FareConfig(models.Model):
+    """Admin-managed fare calculation settings"""
+    rate_per_km = models.DecimalField(max_digits=5, decimal_places=2, default=8)
+    minimum_fare = models.DecimalField(max_digits=8, decimal_places=2, default=50)
+    is_active = models.BooleanField(default=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'fare_configs'
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"Rs {self.rate_per_km}/km, min Rs {self.minimum_fare}"
+
+    @classmethod
+    def active(cls):
+        config = cls.objects.filter(is_active=True).order_by("-updated_at").first()
+        if config:
+            return config
+        return cls.objects.create(rate_per_km=8, minimum_fare=50, is_active=True)
+
+
 class OrderStatusLog(models.Model):
     """Log all order status changes"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
