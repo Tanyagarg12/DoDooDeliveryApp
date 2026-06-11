@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Delivery rider icon (scooter with box) — Material Design "delivery_dining"
+    scaled to fit the 108dp adaptive icon canvas.
+    Safe zone: centre 66dp, so content is offset ~21dp on each side.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- rider head -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,18m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0"/>
+
+    <!-- delivery scooter body (delivery_dining icon scaled to 108x108 safe zone) -->
+    <!-- Original 24x24 path scaled 3× and translated to centre (offset +18, +24) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+M87,54L78,54L78,42L31.5,42
+C30.12,42 29,43.12 29,44.5
+L29,72L35,72
+C35,76.42 38.58,80 43,80
+C47.42,80 51,76.42 51,72
+L69,72
+C69,76.42 72.58,80 77,80
+C81.42,80 85,76.42 85,72
+L91,72
+L91,63
+Z"/>
+    <!-- rear wheel -->
+    <path
+        android:fillColor="#0F766E"
+        android:pathData="M43,74.5m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M43,74.5m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0"/>
+    <!-- front wheel -->
+    <path
+        android:fillColor="#0F766E"
+        android:pathData="M77,74.5m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M77,74.5m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0"/>
+    <!-- cargo box on front -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M78,54L84.5,54L91,63L78,63Z"/>
+    <!-- handlebars -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M65,42L65,35L72,35L72,42Z"/>
+</vector>

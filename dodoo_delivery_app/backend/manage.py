@@ -2,6 +2,14 @@
 import os
 import sys
 
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 
 def main():
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.local")

@@ -1,23 +1,23 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { createRoot } from 'react-dom/client';
-import axios from 'axios';
-import './styles.css';
+import React, { useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import axios from "axios";
+import "./styles.css";
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000/api',
-  headers: { 'Content-Type': 'application/json' },
+  baseURL: "http://localhost:8000/api",
+  headers: { "Content-Type": "application/json" },
 });
 
 function formatLocation(location) {
-  if (!location) return '-';
+  if (!location) return "-";
   const latitude = Number(location.latitude);
   const longitude = Number(location.longitude);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return '-';
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return "-";
   return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
 }
 
 function mapUrl(location) {
-  if (!location) return '#';
+  if (!location) return "#";
   return `https://www.google.com/maps/search/?api=1&query=${location.latitude},${location.longitude}`;
 }
 
@@ -26,32 +26,69 @@ function formatMoney(value) {
   return `Rs ${amount.toFixed(2)}`;
 }
 
+function formatTime(ts) {
+  if (!ts) return "-";
+  return new Date(ts).toLocaleString("en-IN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
 function App() {
-  const [auth, setAuth] = useState({ phone: '+91900000001', password: 'test123' });
-  const [token, setToken] = useState(localStorage.getItem('dodoo_admin_token') || '');
+  const [auth, setAuth] = useState({
+    phone: "+91900000012",
+    password: "test123",
+  });
+  const [token, setToken] = useState(
+    localStorage.getItem("dodoo_admin_token") || "",
+  );
   const [orders, setOrders] = useState([]);
   const [riders, setRiders] = useState([]);
-  const [fareConfig, setFareConfig] = useState({ rate_per_km: '8.00', minimum_fare: '50.00' });
-  const [message, setMessage] = useState('Backend: http://localhost:8000/api');
+  const [fareConfig, setFareConfig] = useState({
+    rate_per_km: "8.00",
+    minimum_fare: "50.00",
+  });
+  const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [tick, setTick] = useState(0);
   const [order, setOrder] = useState({
     order_number: `DD-${Date.now().toString().slice(-6)}`,
-    from_address: 'DoDoo Pickup Hub',
-    from_latitude: 17.385,
-    from_longitude: 78.4867,
-    to_address: 'Customer Doorstep',
-    to_latitude: 17.401,
-    to_longitude: 78.48,
-    items_description: 'Food package',
-    distance_in_km: 4.2,
+    from_address: "Noida Sector 50",
+    from_latitude: 28.5492,
+    from_longitude: 77.3302,
+    to_address: "Customer Location",
+    to_latitude: 28.59,
+    to_longitude: 77.35,
+    items_description: "Food package",
   });
 
-  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
+  const authHeaders = useMemo(
+    () => ({ Authorization: `Bearer ${token}` }),
+    [token],
+  );
+  const secondsAgo = useMemo(
+    () => (lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tick, lastUpdated],
+  );
 
   useEffect(() => {
-    if (token) {
-      loadDashboard();
-    }
+    if (token) loadDashboard();
   }, [token]);
 
   useEffect(() => {
@@ -60,10 +97,19 @@ function App() {
     return () => window.clearInterval(timer);
   }, [token]);
 
-  async function run(action) {
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (token) loadFareConfig();
+  }, [token]);
+
+  async function run(fn) {
     setLoading(true);
     try {
-      await action();
+      await fn();
     } catch (error) {
       setMessage(JSON.stringify(error.response?.data || error.message));
     } finally {
@@ -73,70 +119,142 @@ function App() {
 
   async function login() {
     await run(async () => {
-      const response = await api.post('/riders/login/', auth);
-      localStorage.setItem('dodoo_admin_token', response.data.access_token);
+      const response = await api.post("/riders/login/", auth);
+      localStorage.setItem("dodoo_admin_token", response.data.access_token);
       setToken(response.data.access_token);
-      setMessage(`Logged in as ${response.data.rider.phone}`);
+      setMessage("");
     });
   }
 
-  async function loadOrders() {
-    await run(async () => {
-      const response = await api.get('/orders/', { headers: authHeaders });
-      setOrders(Array.isArray(response.data) ? response.data : response.data.results || []);
-      setMessage('Orders loaded');
-    });
+  function logout() {
+    localStorage.removeItem("dodoo_admin_token");
+    setToken("");
+    setOrders([]);
+    setRiders([]);
+    setMessage("");
+    setLastUpdated(null);
   }
 
   async function loadDashboard() {
     await run(async () => {
-      const [ordersResponse, ridersResponse] = await Promise.all([
-        api.get('/orders/', { headers: authHeaders }),
-        api.get('/riders/active/', { headers: authHeaders }),
+      const [ordersRes, ridersRes] = await Promise.all([
+        api.get("/orders/", { headers: authHeaders }),
+        api.get("/riders/active/", { headers: authHeaders }),
       ]);
-      setOrders(Array.isArray(ordersResponse.data) ? ordersResponse.data : ordersResponse.data.results || []);
-      setRiders(Array.isArray(ridersResponse.data) ? ridersResponse.data : ridersResponse.data.results || []);
-      setMessage('Dashboard loaded');
+      const rawOrders = Array.isArray(ordersRes.data)
+        ? ordersRes.data
+        : ordersRes.data.results || [];
+      rawOrders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      setOrders(rawOrders);
+      setRiders(
+        Array.isArray(ridersRes.data)
+          ? ridersRes.data
+          : ridersRes.data.results || [],
+      );
+      setLastUpdated(Date.now());
+      setMessage("");
     });
   }
 
   async function loadFareConfig() {
     if (!token) return;
     await run(async () => {
-      const response = await api.get('/orders/pricing-config/', { headers: authHeaders });
+      const response = await api.get("/orders/pricing-config/", {
+        headers: authHeaders,
+      });
       setFareConfig(response.data);
-      setMessage('Pricing loaded');
     });
   }
 
   async function saveFareConfig(event) {
     event.preventDefault();
     await run(async () => {
-      const response = await api.post('/orders/pricing-config/', fareConfig, { headers: authHeaders });
+      const response = await api.post("/orders/pricing-config/", fareConfig, {
+        headers: authHeaders,
+      });
       setFareConfig(response.data);
-      setMessage(`Pricing saved: ${formatMoney(response.data.rate_per_km)} per km, minimum ${formatMoney(response.data.minimum_fare)}`);
+      setMessage(
+        `Pricing saved: ${formatMoney(response.data.rate_per_km)}/km, min ${formatMoney(response.data.minimum_fare)}`,
+      );
     });
   }
 
   async function createOrder(event) {
     event.preventDefault();
     await run(async () => {
-      const response = await api.post('/orders/', order, { headers: authHeaders });
+      const distanceKm = haversineKm(
+        Number(order.from_latitude),
+        Number(order.from_longitude),
+        Number(order.to_latitude),
+        Number(order.to_longitude),
+      );
+      const payload = {
+        ...order,
+        distance_in_km: Math.round(distanceKm * 100) / 100,
+      };
+      const response = await api.post("/orders/", payload, {
+        headers: authHeaders,
+      });
       setOrders((current) => [response.data, ...current]);
       setOrder((current) => ({
         ...current,
         order_number: `DD-${Date.now().toString().slice(-6)}`,
       }));
-      setMessage(`Created order ${response.data.order_number}`);
+      setMessage(
+        `Order ${response.data.order_number} created — ${response.data.distance_in_km} km`,
+      );
     });
   }
 
-  useEffect(() => {
-    if (token) {
-      loadFareConfig();
-    }
-  }, [token]);
+  // ── Login page (shown when not authenticated) ───────────────────────────
+  if (!token) {
+    return (
+      <main className="login-page">
+        <form
+          className="login-card"
+          onSubmit={(e) => {
+            e.preventDefault();
+            login();
+          }}
+        >
+          <div className="login-brand">
+            <h1>DoDoo</h1>
+            <p>Admin Portal</p>
+          </div>
+          <label>
+            Phone
+            <input
+              type="tel"
+              autoComplete="username"
+              value={auth.phone}
+              onChange={(e) => setAuth({ ...auth, phone: e.target.value })}
+              placeholder="+91900000012"
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={auth.password}
+              onChange={(e) => setAuth({ ...auth, password: e.target.value })}
+              placeholder="Password"
+            />
+          </label>
+          {message && <p className="login-error">{message}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ marginTop: 8, width: "100%" }}
+          >
+            {loading ? "Logging in…" : "Log in"}
+          </button>
+        </form>
+      </main>
+    );
+  }
 
+  // ── Dashboard (shown when authenticated) ────────────────────────────────
   return (
     <main className="shell">
       <header className="topbar">
@@ -144,76 +262,93 @@ function App() {
           <h1>DoDoo Admin</h1>
           <p>Dispatch operations</p>
         </div>
-        <button onClick={loadDashboard} disabled={!token || loading}>Refresh</button>
+        <div className="topbar-right">
+          {loading && <span className="dim">Working…</span>}
+          {!loading && secondsAgo !== null && (
+            <span className="dim">
+              Updated {secondsAgo}s ago · auto-refresh 8s
+            </span>
+          )}
+          <button onClick={loadDashboard} disabled={loading}>
+            Refresh
+          </button>
+          <button className="btn-secondary" onClick={logout}>
+            Log out
+          </button>
+        </div>
       </header>
 
-      <section className="grid">
-        <form className="panel" onSubmit={(event) => { event.preventDefault(); login(); }}>
-          <h2>Backend Login</h2>
-          <label>
-            Phone
-            <input value={auth.phone} onChange={(event) => setAuth({ ...auth, phone: event.target.value })} />
-          </label>
-          <label>
-            Password
-            <input type="password" value={auth.password} onChange={(event) => setAuth({ ...auth, password: event.target.value })} />
-          </label>
-          <button disabled={loading}>Log in</button>
-        </form>
+      {message && <p className="dash-message">{message}</p>}
 
+      <section className="grid-2col">
         <form className="panel" onSubmit={saveFareConfig}>
           <h2>Fare Configuration</h2>
           <label>
-            Per km amount
+            Per km amount (Rs)
             <input
               type="number"
               min="0"
               step="0.01"
               value={fareConfig.rate_per_km}
-              onChange={(event) => setFareConfig({ ...fareConfig, rate_per_km: event.target.value })}
+              onChange={(e) =>
+                setFareConfig({ ...fareConfig, rate_per_km: e.target.value })
+              }
             />
           </label>
           <label>
-            Minimum amount
+            Minimum fare (Rs)
             <input
               type="number"
               min="0"
               step="0.01"
               value={fareConfig.minimum_fare}
-              onChange={(event) => setFareConfig({ ...fareConfig, minimum_fare: event.target.value })}
+              onChange={(e) =>
+                setFareConfig({ ...fareConfig, minimum_fare: e.target.value })
+              }
             />
           </label>
-          <button disabled={!token || loading}>Save pricing</button>
+          <button disabled={loading}>Save pricing</button>
         </form>
 
         <form className="panel" onSubmit={createOrder}>
           <h2>Create Order</h2>
           {Object.entries(order).map(([key, value]) => (
             <label key={key}>
-              {key.replaceAll('_', ' ')}
+              {key.replaceAll("_", " ")}
               <input
                 value={value}
-                onChange={(event) => setOrder({ ...order, [key]: event.target.value })}
+                onChange={(e) => setOrder({ ...order, [key]: e.target.value })}
               />
             </label>
           ))}
-          <button disabled={!token || loading}>Create order</button>
+          <p className="field-hint">
+            Distance is auto-calculated from coordinates on the backend.
+          </p>
+          <button disabled={loading}>Create order</button>
         </form>
       </section>
 
       <section className="panel">
-        <div className="status">{loading ? 'Working...' : message}</div>
-        <h2>Active Riders</h2>
+        <h2>
+          Active Riders
+          <small className="section-sub">
+            (busy riders shown only if delivery destination is within 15 km)
+          </small>
+        </h2>
         <div className="rider-grid">
           {riders.map((rider) => (
             <article className="rider-card" key={rider.id}>
-              <strong>{rider.first_name || 'Rider'} {rider.last_name || ''}</strong>
+              <strong>
+                {rider.first_name || "Rider"} {rider.last_name || ""}
+              </strong>
               <span>{rider.phone}</span>
-              <span className={`badge ${rider.current_status}`}>{rider.current_status}</span>
+              <span className={`badge ${rider.current_status}`}>
+                {rider.current_status}
+              </span>
               <small>
                 {rider.tracking
-                  ? `Location: ${rider.tracking.latitude}, ${rider.tracking.longitude}`
-                  : 'No live location yet'}
+                  ? `📍 ${rider.tracking.latitude}, ${rider.tracking.longitude}`
+                  : "No live location"}
               </small>
             </article>
           ))}
@@ -222,7 +357,12 @@ function App() {
       </section>
 
       <section className="panel">
-        <h2>Orders</h2>
+        <h2>
+          All Orders
+          <small className="section-sub">
+            {orders.length} total · newest first · auto-refreshes every 8s
+          </small>
+        </h2>
         <div className="table">
           <div className="row head">
             <span>Order</span>
@@ -232,35 +372,60 @@ function App() {
             <span>Fare</span>
             <span>Pickup</span>
             <span>Drop</span>
-            <span>Delivery Location</span>
+            {/*<span>Delivery Location</span>*/}
+            <span>Created</span>
           </div>
           {orders.map((item) => (
             <div className="row" key={item.id}>
               <span>{item.order_number}</span>
-              <span>{item.status}</span>
-              <span>{item.assigned_rider_phone || 'Unassigned'}</span>
+              <span>
+                <span className={`badge ${item.status}`}>
+                  {item.status.replace(/_/g, " ")}
+                </span>
+              </span>
+              <span>
+                {item.assigned_rider_phone || (
+                  <span className="dim">Unassigned</span>
+                )}
+              </span>
               <span>{item.distance_in_km} km</span>
               <span>
                 {formatMoney(item.total_earning)}
-                <small>{formatMoney(item.rate_per_km)}/km, min {formatMoney(item.minimum_fare)}</small>
+                <small>
+                  {formatMoney(item.rate_per_km)}/km · min{" "}
+                  {formatMoney(item.minimum_fare)}
+                </small>
               </span>
               <span>{item.from_address}</span>
               <span>{item.to_address}</span>
-              <span>
+              {/* <span>
                 {item.delivery_location ? (
-                  <a href={mapUrl(item.delivery_location)} target="_blank" rel="noreferrer">
+                  <a
+                    href={mapUrl(item.delivery_location)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     {formatLocation(item.delivery_location)}
-                    <small>{item.delivery_location.source === 'live' ? 'Live' : 'Last'}</small>
+                    <small>
+                      {item.delivery_location.source === "live"
+                        ? "🟢 Live"
+                        : "⚪ Last known"}
+                    </small>
                   </a>
-                ) : '-'}
-              </span>
+                ) : (
+                  <span className="dim">—</span>
+                )}
+              </span> */}
+              <span>{formatTime(item.created_at)}</span>
             </div>
           ))}
-          {!orders.length && <p className="empty">No orders yet.</p>}
+          {!orders.length && (
+            <p className="empty">No orders yet. Create one above.</p>
+          )}
         </div>
       </section>
     </main>
   );
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById("root")).render(<App />);

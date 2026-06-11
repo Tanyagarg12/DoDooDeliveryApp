@@ -32,8 +32,61 @@ button:disabled {
   opacity: 0.55;
 }
 
+.btn-secondary {
+  background: #6b7280;
+}
+
+/* ── Login page ─────────────────────────────────────────────────── */
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #f0fdf4;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  border: 1px solid #d7dee2;
+  border-radius: 12px;
+  padding: 36px 32px;
+  background: white;
+  box-shadow: 0 4px 24px rgba(15, 118, 110, 0.08);
+}
+
+.login-brand {
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.login-brand h1 {
+  font-size: 36px;
+  color: #0f766e;
+  margin: 0;
+  letter-spacing: -1px;
+}
+
+.login-brand p {
+  color: #60717c;
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.login-error {
+  color: #dc2626;
+  font-size: 13px;
+  margin: 0 0 8px;
+  background: #fef2f2;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+/* ── Dashboard shell ─────────────────────────────────────────────── */
+
 .shell {
-  width: min(1180px, calc(100% - 32px));
+  width: min(1200px, calc(100% - 32px));
   margin: 0 auto;
   padding: 24px 0;
 }
@@ -44,6 +97,12 @@ button:disabled {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 18px;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 h1,
@@ -65,9 +124,39 @@ h2 {
   color: #60717c;
 }
 
-.grid {
+.dim {
+  color: #8a9aa4;
+  font-size: 0.85em;
+}
+
+.dash-message {
+  margin: 0 0 14px;
+  font-size: 14px;
+  color: #0f766e;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.section-sub {
+  font-weight: normal;
+  font-size: 0.72em;
+  opacity: 0.6;
+  margin-left: 8px;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: #8a9aa4;
+  margin-bottom: 10px;
+}
+
+/* ── Two-column grid (fare config + create order) ───────────────── */
+
+.grid-2col {
   display: grid;
-  grid-template-columns: 280px 280px 1fr;
+  grid-template-columns: 300px 1fr;
   gap: 16px;
   margin-bottom: 16px;
 }
@@ -98,11 +187,7 @@ input {
   color: #172026;
 }
 
-.status {
-  margin-bottom: 12px;
-  color: #0f766e;
-  font-size: 14px;
-}
+/* ── Orders table ────────────────────────────────────────────────── */
 
 .table {
   overflow-x: auto;
@@ -110,9 +195,9 @@ input {
 
 .row {
   display: grid;
-  grid-template-columns: 140px 110px 140px 90px 170px minmax(170px, 1fr) minmax(170px, 1fr) 190px;
+  grid-template-columns: 140px 120px 140px 90px 170px minmax(160px, 1fr) minmax(160px, 1fr) 190px 130px;
   gap: 12px;
-  min-width: 1300px;
+  min-width: 1430px;
   padding: 10px 0;
   border-top: 1px solid #edf0f2;
 }
@@ -156,6 +241,8 @@ input {
   color: #60717c;
 }
 
+/* ── Riders grid ────────────────────────────────────────────────── */
+
 .rider-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -170,6 +257,8 @@ input {
   padding: 12px;
 }
 
+/* ── Status badges ───────────────────────────────────────────────── */
+
 .badge {
   width: fit-content;
   border-radius: 999px;
@@ -181,6 +270,7 @@ input {
   text-transform: uppercase;
 }
 
+/* Rider statuses */
 .badge.online {
   color: #0b5f56;
   background: #e8f5f1;
@@ -191,12 +281,51 @@ input {
   background: #fff4de;
 }
 
+/* Order statuses */
+.badge.pending {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.badge.accepted {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
+.badge.picked_up {
+  color: #6b21a8;
+  background: #ede9fe;
+}
+
+.badge.in_transit {
+  color: #0b5f56;
+  background: #e8f5f1;
+}
+
+.badge.reached {
+  color: #065f46;
+  background: #d1fae5;
+}
+
+.badge.completed {
+  color: #065f46;
+  background: #bbf7d0;
+}
+
+.badge.cancelled {
+  color: #7f1d1d;
+  background: #fee2e2;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+
 @media (max-width: 1020px) {
-  .grid {
+  .grid-2col {
     grid-template-columns: 1fr;
   }
 
-  .topbar {
+  .topbar,
+  .topbar-right {
     align-items: flex-start;
     flex-direction: column;
   }

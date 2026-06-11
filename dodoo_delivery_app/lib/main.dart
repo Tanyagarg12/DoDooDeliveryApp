@@ -7,9 +7,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await RiderApi.init();
   runApp(const DodooRiderApp());
 }
 
@@ -68,21 +71,42 @@ class RiderApi {
   RiderApi()
     : _dio = Dio(
         BaseOptions(
-          baseUrl: _baseUrl,
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
+          baseUrl: _resolveBaseUrl(),
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 15),
           headers: {'Content-Type': 'application/json'},
         ),
       );
 
   static const storage = FlutterSecureStorage();
+  static const _urlPrefKey = 'dodoo_api_url';
+  static String? _customUrl;
   final Dio _dio;
 
-  static String get _baseUrl {
+  /// Call once from main() before runApp.
+  static Future<void> init() async {
+    final prefs = await SharedPreferences.getInstance();
+    _customUrl = prefs.getString(_urlPrefKey);
+  }
+
+  /// Persist a custom backend URL so it survives app restarts.
+  static Future<void> saveCustomUrl(String url) async {
+    _customUrl = url;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_urlPrefKey, url);
+  }
+
+  /// Clear any saved custom URL and revert to auto-detect.
+  static Future<void> clearCustomUrl() async {
+    _customUrl = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_urlPrefKey);
+  }
+
+  static String _resolveBaseUrl() {
+    if (_customUrl != null && _customUrl!.isNotEmpty) return _customUrl!;
     const configured = String.fromEnvironment('DODOO_API_URL');
-    if (configured.isNotEmpty) {
-      return configured;
-    }
+    if (configured.isNotEmpty) return configured;
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       return 'http://10.0.2.2:8000/api';
     }
@@ -90,6 +114,32 @@ class RiderApi {
   }
 
   String get baseUrl => _dio.options.baseUrl;
+
+  static String _normalizeApiUrl(String url) {
+    var candidate = url.trim();
+    if (candidate.isEmpty) return '';
+    if (!candidate.startsWith('http://') && !candidate.startsWith('https://')) {
+      candidate = 'http://$candidate';
+    }
+
+    final uri = Uri.tryParse(candidate);
+    if (uri == null || uri.host.isEmpty) return '';
+
+    var path = uri.path;
+    if (path.isEmpty || path == '/') {
+      path = '/api';
+    }
+
+    final normalized = Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: path,
+    ).toString();
+    return normalized.endsWith('/')
+        ? normalized.substring(0, normalized.length - 1)
+        : normalized;
+  }
 
   Future<Map<String, dynamic>> signup({
     required String phone,
@@ -289,7 +339,7 @@ class RiderAuthScreen extends StatefulWidget {
 }
 
 class _RiderAuthScreenState extends State<RiderAuthScreen> {
-  final _api = RiderApi();
+  RiderApi _api = RiderApi();
   final _phone = TextEditingController();
   final _firstName = TextEditingController();
   final _password = TextEditingController();
@@ -313,11 +363,39 @@ class _RiderAuthScreenState extends State<RiderAuthScreen> {
   }
 
   Future<void> _continue() async {
+    if (!_validate()) return;
     if (_isSignup) {
       await _signup();
     } else {
       await _loginWithOtp();
     }
+  }
+
+  bool _validate() {
+    final phoneDigits = _phone.text.trim().replaceAll(RegExp(r'[^0-9]'), '');
+    if (phoneDigits.length < 9 || phoneDigits.length > 10) {
+      setState(() => _message = 'Enter a valid 10-digit mobile number.');
+      return false;
+    }
+    if (_password.text.length < 6) {
+      setState(() => _message = 'Password must be at least 6 characters.');
+      return false;
+    }
+    if (_isSignup) {
+      if (_firstName.text.trim().isEmpty) {
+        setState(() => _message = 'Please enter your full name.');
+        return false;
+      }
+      if (_license.text.trim().length < 5) {
+        setState(() => _message = 'Enter a valid driving licence number (e.g. MH0120110012345).');
+        return false;
+      }
+      if (_aadhar.text.trim().length != 12) {
+        setState(() => _message = 'Aadhaar number must be exactly 12 digits.');
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _loginWithOtp() async {
@@ -392,29 +470,194 @@ class _RiderAuthScreenState extends State<RiderAuthScreen> {
     });
     try {
       await action();
-    } on DioException catch (error) {
+    } on DioException catch (e) {
       if (mounted) {
-        setState(() => _message = _formatError(error));
+        setState(() => _message = _dioError(e));
+        // Auto-open URL dialog on connection failure so the user can fix it immediately
+        if (_isConnectionError(e)) {
+          await _changeApiUrl();
+        }
       }
+    } catch (e) {
+      if (mounted) setState(() => _message = e.toString());
     } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  String _cleanPhone() => _phone.text.trim().replaceAll(' ', '');
+  bool _isConnectionError(DioException e) =>
+      e.type == DioExceptionType.connectionTimeout ||
+      e.type == DioExceptionType.receiveTimeout ||
+      e.type == DioExceptionType.sendTimeout ||
+      e.type == DioExceptionType.connectionError;
 
-  String _formatError(DioException error) {
-    final data = error.response?.data;
-    if (data is Map && data.isNotEmpty) {
-      final firstValue = data.values.first;
-      if (firstValue is List && firstValue.isNotEmpty) {
-        return firstValue.first.toString();
-      }
-      return firstValue.toString();
+  String _dioError(DioException e) {
+    if (_isConnectionError(e)) {
+      return 'Cannot reach backend at ${_api.baseUrl}. '
+          'Tap the API address above and enter your PC LAN address.';
     }
-    return error.message ?? 'Request failed';
+    final data = e.response?.data;
+    if (data is Map && data.isNotEmpty) {
+      final v = data.values.first;
+      if (v is List && v.isNotEmpty) return v.first.toString();
+      return v.toString();
+    }
+    return e.message ?? 'Request failed (${e.type.name})';
+  }
+
+  String _cleanPhone() {
+    final digits = _phone.text.trim().replaceAll(RegExp(r'[^0-9]'), '');
+    // Already has country code (e.g. user typed 91XXXXXXXXXX)
+    if (digits.length == 12 && digits.startsWith('91')) return '+$digits';
+    return '+91$digits';
+  }
+
+  /// Show a dialog to change the backend URL (auto-opened on connection failure).
+  Future<void> _changeApiUrl() async {
+    final controller = TextEditingController(text: _api.baseUrl);
+
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          String testStatus = '';
+          bool testing = false;
+
+          Future<void> testConnection() async {
+            setLocal(() { testing = true; testStatus = 'Testing…'; });
+            final normalized = RiderApi._normalizeApiUrl(controller.text);
+            if (normalized.isEmpty) {
+              setLocal(() {
+                testing = false;
+                testStatus = '✗ Invalid URL. Use http://192.168.1.42:8000/api';
+              });
+              return;
+            }
+            controller.text = normalized;
+            try {
+              final testDio = Dio(BaseOptions(
+                baseUrl: normalized,
+                connectTimeout: const Duration(seconds: 6),
+                receiveTimeout: const Duration(seconds: 6),
+              ));
+              await testDio.get('/', options: Options(validateStatus: (_) => true));
+              setLocal(() { testing = false; testStatus = '✓ Server reachable!'; });
+            } on DioException catch (e) {
+              final unreachable = e.type == DioExceptionType.connectionTimeout ||
+                  e.type == DioExceptionType.connectionError;
+              if (unreachable) {
+                setLocal(() { testing = false; testStatus = '✗ Cannot reach $normalized'; });
+              } else {
+                // Any HTTP response (even 404) means the server IS up
+                setLocal(() { testing = false; testStatus = '✓ Server reachable!'; });
+              }
+            } catch (_) {
+              setLocal(() { testing = false; testStatus = '✗ Unknown error'; });
+            }
+          }
+
+          return AlertDialog(
+            title: Row(
+              children: const [
+                Icon(Icons.wifi_off, color: Colors.orange),
+                SizedBox(width: 8),
+                Text('Fix Backend Connection'),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F4FD),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF90CAF9)),
+                    ),
+                    child: const Text(
+                      'Physical device: 10.0.2.2 only works in the emulator.\n\n'
+                      '1. PC → Command Prompt → run:\n'
+                      '      ipconfig\n'
+                      '   Note the IPv4 Address (e.g. 192.168.1.42)\n\n'
+                      '2. Start Django with:\n'
+                      '      python manage.py runserver 0.0.0.0:8000\n\n'
+                      '3. Phone & PC must be on the same Wi-Fi.\n\n'
+                      '4. Enter URL below:\n'
+                      '   http://192.168.1.42:8000/api\n\n'
+                      'Windows Firewall blocking? Run in CMD (as admin):\n'
+                      '   netsh advfirewall firewall add rule\n'
+                      '   name="Django8000" dir=in action=allow\n'
+                      '   protocol=TCP localport=8000',
+                      style: TextStyle(fontSize: 11.5),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: controller,
+                    decoration: const InputDecoration(
+                      labelText: 'Backend API URL',
+                      hintText: 'http://192.168.1.42:8000/api',
+                    ),
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                  ),
+                  if (testStatus.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      testStatus,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: testStatus.startsWith('✓')
+                            ? Colors.green.shade700
+                            : Colors.red.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await RiderApi.clearCustomUrl();
+                  if (ctx.mounted) Navigator.pop(ctx, '');
+                },
+                child: const Text('Reset'),
+              ),
+              TextButton(
+                onPressed: testing ? null : testConnection,
+                child: const Text('Test'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final normalized = RiderApi._normalizeApiUrl(controller.text);
+                  if (normalized.isEmpty) {
+                    setLocal(() {});
+                    return;
+                  }
+                  controller.text = normalized;
+                  Navigator.pop(ctx, normalized);
+                },
+                child: const Text('Save & Retry'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (result == null) return; // dismissed without action
+    if (result.isEmpty) {
+      // Reset to default
+      setState(() => _api = RiderApi());
+    } else {
+      await RiderApi.saveCustomUrl(result);
+      setState(() => _api = RiderApi());
+    }
   }
 
   @override
@@ -453,9 +696,26 @@ class _RiderAuthScreenState extends State<RiderAuthScreen> {
                               fontWeight: FontWeight.w800,
                             ),
                           ),
-                          Text(
-                            'API: ${_api.baseUrl}',
-                            style: textTheme.bodySmall,
+                          GestureDetector(
+                            onTap: _changeApiUrl,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'API: ${_api.baseUrl}',
+                                    style: textTheme.bodySmall?.copyWith(
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.edit,
+                                  size: 12,
+                                  color: textTheme.bodySmall?.color,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -489,12 +749,7 @@ class _RiderAuthScreenState extends State<RiderAuthScreen> {
                       : 'Password first, OTP second.',
                   child: Column(
                     children: [
-                      _field(
-                        _phone,
-                        'Phone number',
-                        TextInputType.phone,
-                        icon: Icons.phone,
-                      ),
+                      _phoneField(),
                       _field(
                         _password,
                         'Password',
@@ -505,21 +760,29 @@ class _RiderAuthScreenState extends State<RiderAuthScreen> {
                       if (_isSignup) ...[
                         _field(
                           _firstName,
-                          'First name',
+                          'Full name',
                           TextInputType.name,
                           icon: Icons.badge,
                         ),
                         _field(
                           _license,
-                          'Driving license number',
+                          'Driving licence number',
                           TextInputType.text,
                           icon: Icons.credit_card,
+                          hint: 'e.g. MH0120110012345',
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[A-Za-z0-9]'),
+                            ),
+                            LengthLimitingTextInputFormatter(16),
+                          ],
                         ),
                         _field(
                           _aadhar,
                           'Aadhaar number',
                           TextInputType.number,
                           icon: Icons.assignment_ind,
+                          hint: '12-digit Aadhaar',
                           inputFormatters: [
                             FilteringTextInputFormatter.digitsOnly,
                             LengthLimitingTextInputFormatter(12),
@@ -580,12 +843,52 @@ class _RiderAuthScreenState extends State<RiderAuthScreen> {
     );
   }
 
+  /// Phone input with a fixed +91 country code prefix.
+  Widget _phoneField() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextField(
+        controller: _phone,
+        keyboardType: TextInputType.phone,
+        inputFormatters: [
+          FilteringTextInputFormatter.digitsOnly,
+          LengthLimitingTextInputFormatter(10),
+        ],
+        decoration: InputDecoration(
+          labelText: 'Mobile number',
+          hintText: '10-digit number',
+          prefixIcon: Container(
+            margin: const EdgeInsets.only(left: 12, right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            decoration: BoxDecoration(
+              border: Border(
+                right: BorderSide(color: const Color(0xFFD5DEDC)),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Text('🇮🇳', style: TextStyle(fontSize: 16)),
+                SizedBox(width: 6),
+                Text(
+                  '+91',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _field(
     TextEditingController controller,
     String label,
     TextInputType keyboardType, {
     bool obscure = false,
     IconData? icon,
+    String? hint,
     List<TextInputFormatter>? inputFormatters,
   }) {
     return Padding(
@@ -597,6 +900,7 @@ class _RiderAuthScreenState extends State<RiderAuthScreen> {
         inputFormatters: inputFormatters,
         decoration: InputDecoration(
           labelText: label,
+          hintText: hint,
           prefixIcon: icon == null ? null : Icon(icon),
         ),
       ),

@@ -22,6 +22,8 @@ class RiderSignupSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "last_name": {"required": False, "allow_blank": True},
             "email": {"required": False, "allow_blank": True},
+            "driving_license_number": {"required": False, "allow_blank": True},
+            "aadhar_number": {"required": False, "allow_blank": True},
         }
 
     def validate(self, attrs):

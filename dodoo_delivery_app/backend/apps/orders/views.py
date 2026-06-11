@@ -24,17 +24,24 @@ from apps.tracking.views import serialize_wallet, serialize_withdrawal
 
 
 class OrderViewSet(viewsets.ModelViewSet):
-    queryset = Order.objects.all()
+    queryset = Order.objects.all().order_by("-created_at")
     serializer_class = OrderSerializer
 
     def perform_create(self, serializer):
+        from apps.riders.views import haversine_km
         fare_config = FareConfig.active()
         order = serializer.save(
             rate_per_km=fare_config.rate_per_km,
             minimum_fare=fare_config.minimum_fare,
         )
+        if (order.from_latitude is not None and order.from_longitude is not None
+                and order.to_latitude is not None and order.to_longitude is not None):
+            order.distance_in_km = round(haversine_km(
+                order.from_latitude, order.from_longitude,
+                order.to_latitude, order.to_longitude,
+            ), 2)
         order.total_earning = order.calculate_earning()
-        order.save(update_fields=["rate_per_km", "minimum_fare", "total_earning"])
+        order.save(update_fields=["distance_in_km", "rate_per_km", "minimum_fare", "total_earning"])
         self._notify_available_riders(order)
 
     @action(detail=False, methods=["get", "post"], url_path="pricing-config")

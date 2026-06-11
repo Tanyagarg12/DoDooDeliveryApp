@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Allows cleartext (plain HTTP) to local and LAN backend servers during development.
+    Covers: Android emulator (10.0.2.2), localhost, and any 192.168.x.x / 10.x.x.x LAN IP.
+    For production, remove this file and use HTTPS only.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android emulator host alias -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- Standard localhost -->
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+    <!-- Allow cleartext to any private LAN IP (physical device on Wi-Fi) -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -1,3 +1,5 @@
+import math
+
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
@@ -6,6 +8,17 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.riders.models import Rider
 from apps.riders.serializers import RiderSerializer, RiderSignupSerializer
+
+MAX_ORDER_DISTANCE_KM = 15
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
 
 
 class RiderSignupView(APIView):
@@ -82,6 +95,7 @@ class RiderVerifyOtpView(APIView):
             {
                 "message": "OTP verified successfully.",
                 "access_token": str(refresh.access_token),
+                "token": str(refresh.access_token),
                 "refresh_token": str(refresh),
                 "rider": RiderSerializer(rider).data,
             }
@@ -108,6 +122,7 @@ class RiderLoginView(APIView):
         return Response(
             {
                 "access_token": str(refresh.access_token),
+                "token": str(refresh.access_token),
                 "refresh_token": str(refresh),
                 "rider": RiderSerializer(rider).data,
             }
@@ -142,9 +157,27 @@ class RiderStatusView(APIView):
 
 class ActiveRidersView(APIView):
     def get(self, request):
+        from apps.orders.models import Order
+
         riders = Rider.objects.filter(current_status__in=["online", "busy"]).order_by("current_status", "first_name")
         data = []
         for rider in riders:
+            if rider.current_status == "busy":
+                active_order = Order.objects.filter(
+                    assigned_rider=rider,
+                    status__in=["accepted", "picked_up", "in_transit", "reached"],
+                ).values("to_latitude", "to_longitude", "distance_in_km").first()
+                if active_order:
+                    if rider.current_latitude is not None and rider.current_longitude is not None:
+                        dist = haversine_km(
+                            rider.current_latitude, rider.current_longitude,
+                            active_order["to_latitude"], active_order["to_longitude"],
+                        )
+                        if dist >= MAX_ORDER_DISTANCE_KM:
+                            continue
+                    elif active_order["distance_in_km"] >= MAX_ORDER_DISTANCE_KM:
+                        continue
+
             tracking = getattr(rider, "current_tracking", None)
             data.append(
                 {

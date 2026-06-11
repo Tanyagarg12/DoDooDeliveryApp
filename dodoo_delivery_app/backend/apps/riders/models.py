@@ -15,9 +15,9 @@ class Rider(AbstractUser):
     phone = models.CharField(max_length=15, unique=True)
     profile_picture = models.FileField(upload_to='rider_profiles/', null=True, blank=True)
     address = models.TextField(null=True, blank=True)
-    driving_license_number = models.CharField(max_length=50, unique=True)
+    driving_license_number = models.CharField(max_length=50, unique=True, null=True, blank=True)
     driving_license_image = models.FileField(upload_to='driving_licenses/', null=True, blank=True)
-    aadhar_number = models.CharField(max_length=12, unique=True)
+    aadhar_number = models.CharField(max_length=12, unique=True, null=True, blank=True)
     aadhar_front = models.FileField(upload_to='aadhar_front/', null=True, blank=True)
     aadhar_back = models.FileField(upload_to='aadhar_back/', null=True, blank=True)
     

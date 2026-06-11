@@ -1,5 +1,4 @@
 import os
-from importlib.util import find_spec
 from datetime import timedelta
 from pathlib import Path
 
@@ -31,8 +30,11 @@ INSTALLED_APPS = [
     "apps.tracking",
 ]
 
-if find_spec("daphne"):
+try:
+    import daphne  # noqa: F401
     INSTALLED_APPS.insert(0, "daphne")
+except Exception:
+    pass
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
