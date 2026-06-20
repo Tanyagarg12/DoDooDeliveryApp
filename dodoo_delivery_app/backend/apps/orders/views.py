@@ -1,5 +1,10 @@
+import datetime
+import uuid
 from decimal import Decimal
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from django.db import OperationalError, transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -21,6 +26,32 @@ from apps.tracking.models import (
     WithdrawalRequest,
 )
 from apps.tracking.views import serialize_wallet, serialize_withdrawal
+
+
+def _broadcast(group: str, event_type: str, payload: dict):
+    """Fire-and-forget channel-layer broadcast. Silently skips if channels unavailable."""
+    try:
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        async_to_sync(layer.group_send)(group, {"type": event_type, **payload})
+    except Exception:
+        pass
+
+
+def _jsonify(data):
+    """Recursively convert Decimal/UUID/datetime to JSON-safe primitives."""
+    if isinstance(data, dict):
+        return {k: _jsonify(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_jsonify(v) for v in data]
+    if isinstance(data, Decimal):
+        return float(data)
+    if isinstance(data, uuid.UUID):
+        return str(data)
+    if isinstance(data, (datetime.datetime, datetime.date)):
+        return data.isoformat()
+    return data
 
 
 class OrderViewSet(viewsets.ModelViewSet):
@@ -49,7 +80,6 @@ class OrderViewSet(viewsets.ModelViewSet):
         fare_config = FareConfig.active()
         if request.method == "GET":
             return Response(FareConfigSerializer(fare_config).data)
-
         serializer = FareConfigSerializer(fare_config, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save(is_active=True)
@@ -78,25 +108,28 @@ class OrderViewSet(viewsets.ModelViewSet):
         wallet, _ = RiderWallet.objects.get_or_create(rider=rider)
         withdrawals = WithdrawalRequest.objects.filter(rider=rider)[:10]
 
-        earnings = completed_orders.aggregate(total=Sum("total_earning"))["total"] or 0
-        return Response(
-            {
-                "rider": RiderSerializer(rider, context={"request": request}).data,
-                "active_orders": OrderSerializer(active_orders, many=True).data,
-                "order_history": OrderSerializer(order_history, many=True).data,
-                "pending_offers": OrderOfferSerializer(pending_offers, many=True).data,
-                "earnings_summary": {
-                    "today": earnings,
-                    "week": earnings,
-                    "month": earnings,
-                    "completed_orders": completed_orders.count(),
-                },
-                "wallet": serialize_wallet(wallet),
-                "withdrawal_requests": [
-                    serialize_withdrawal(item) for item in withdrawals
-                ],
-            }
-        )
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timezone.timedelta(days=7)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        def _earn(qs):
+            return float(qs.aggregate(total=Sum("total_earning"))["total"] or 0)
+
+        return Response({
+            "rider": RiderSerializer(rider, context={"request": request}).data,
+            "active_orders": OrderSerializer(active_orders, many=True).data,
+            "order_history": OrderSerializer(order_history, many=True).data,
+            "pending_offers": OrderOfferSerializer(pending_offers, many=True).data,
+            "earnings_summary": {
+                "today": _earn(completed_orders.filter(completed_at__gte=today_start)),
+                "week": _earn(completed_orders.filter(completed_at__gte=week_start)),
+                "month": _earn(completed_orders.filter(completed_at__gte=month_start)),
+                "completed_orders": completed_orders.count(),
+            },
+            "wallet": serialize_wallet(wallet),
+            "withdrawal_requests": [serialize_withdrawal(item) for item in withdrawals],
+        })
 
     @action(detail=False, methods=["get"], url_path="offers")
     def offers(self, request):
@@ -109,28 +142,99 @@ class OrderViewSet(viewsets.ModelViewSet):
         ).select_related("order")
         return Response(OrderOfferSerializer(offers, many=True).data)
 
+    @action(detail=False, methods=["get"], url_path="history")
+    def history(self, request):
+        rider = request.user
+        filter_type = request.query_params.get("filter", "week")
+
+        now = timezone.now()
+        if filter_type == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif filter_type == "month":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:  # week
+            start = now - timezone.timedelta(days=7)
+
+        completed_orders = Order.objects.filter(
+            assigned_rider=rider,
+            status__in=["completed", "cancelled"],
+            created_at__gte=start,
+        ).order_by("-created_at")
+
+        rejected = OrderNotification.objects.filter(
+            rider=rider,
+            is_rejected=True,
+            notified_at__gte=start,
+        ).select_related("order").order_by("-notified_at")
+
+        earnings_total = (
+            completed_orders.filter(status="completed")
+            .aggregate(total=Sum("total_earning"))["total"] or 0
+        )
+        return Response({
+            "accepted": OrderSerializer(completed_orders, many=True).data,
+            "rejected": OrderOfferSerializer(rejected, many=True).data,
+            "summary": {
+                "total_completed": completed_orders.filter(status="completed").count(),
+                "total_earnings": str(earnings_total),
+                "total_rejected": rejected.count(),
+            },
+        })
+
     @action(detail=True, methods=["post"], url_path="accept")
     def accept(self, request, pk=None):
-        order = self.get_object()
         rider = request.user
-        if order.status != "pending":
-            return Response({"error": "Order is no longer available"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                # Lock the row — raises OperationalError if already locked
+                order = (
+                    Order.objects.select_for_update(nowait=True)
+                    .get(pk=pk)
+                )
+                if order.status != "pending":
+                    return Response(
+                        {"error": "Order is no longer available"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
-        notification, _ = OrderNotification.objects.get_or_create(order=order, rider=rider)
-        notification.is_accepted = True
-        notification.is_rejected = False
-        notification.accepted_at = timezone.now()
-        notification.save(update_fields=["is_accepted", "is_rejected", "accepted_at"])
+                notification, _ = OrderNotification.objects.get_or_create(
+                    order=order, rider=rider
+                )
+                notification.is_accepted = True
+                notification.is_rejected = False
+                notification.accepted_at = timezone.now()
+                notification.save(update_fields=["is_accepted", "is_rejected", "accepted_at"])
 
-        order.assigned_rider = rider
-        order.status = "accepted"
-        order.accepted_at = timezone.now()
-        if order.total_earning is None:
-            order.total_earning = order.calculate_earning()
-        order.save(update_fields=["assigned_rider", "status", "accepted_at", "total_earning", "status_updated_at"])
-        OrderStatusLog.objects.create(order=order, previous_status="pending", new_status="accepted", changed_by="rider")
-        Rider.objects.filter(pk=rider.pk).update(current_status="busy")
-        rider.current_status = "busy"
+                order.assigned_rider = rider
+                order.status = "accepted"
+                order.accepted_at = timezone.now()
+                if order.total_earning is None:
+                    order.total_earning = order.calculate_earning()
+                order.save(
+                    update_fields=[
+                        "assigned_rider", "status", "accepted_at",
+                        "total_earning", "status_updated_at",
+                    ]
+                )
+                OrderStatusLog.objects.create(
+                    order=order,
+                    previous_status="pending",
+                    new_status="accepted",
+                    changed_by="rider",
+                )
+                Rider.objects.filter(pk=rider.pk).update(current_status="busy")
+                rider.current_status = "busy"
+        except OperationalError:
+            return Response(
+                {"error": "Order is being accepted by another rider. Please try another."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Tell all riders this order is gone
+        _broadcast("all_riders", "order_accepted", {
+            "order_id": str(order.pk),
+            "rider_id": str(rider.pk),
+        })
         return Response(OrderSerializer(order).data)
 
     @action(detail=True, methods=["post"], url_path="reject")
@@ -153,11 +257,17 @@ class OrderViewSet(viewsets.ModelViewSet):
         if next_status not in valid_flow:
             return Response({"error": "Invalid order status"}, status=status.HTTP_400_BAD_REQUEST)
         if order.assigned_rider_id != rider.id:
-            return Response({"error": "This order is assigned to another rider"}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "This order is assigned to another rider"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if next_status == order.status:
             return Response(OrderSerializer(order).data)
         if valid_flow.index(next_status) < valid_flow.index(order.status):
-            return Response({"error": "Order cannot move backwards"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Order cannot move backwards"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         previous_status = order.status
         order.status = next_status
@@ -171,10 +281,23 @@ class OrderViewSet(viewsets.ModelViewSet):
             update_fields.append("completed_at")
             self._credit_completed_order(order, rider)
         order.save(update_fields=update_fields)
-        OrderStatusLog.objects.create(order=order, previous_status=previous_status, new_status=next_status, changed_by="rider")
+        OrderStatusLog.objects.create(
+            order=order,
+            previous_status=previous_status,
+            new_status=next_status,
+            changed_by="rider",
+        )
         if next_status == "completed":
-            Rider.objects.filter(pk=rider.pk).update(current_status="online", total_orders=rider.total_orders + 1)
+            Rider.objects.filter(pk=rider.pk).update(
+                current_status="online", total_orders=rider.total_orders + 1
+            )
             rider.current_status = "online"
+
+        # Notify the assigned rider's personal channel
+        _broadcast(f"rider_{rider.pk}", "order_status_changed", {
+            "order_id": str(order.pk),
+            "status": next_status,
+        })
         return Response(OrderSerializer(order).data)
 
     def _notify_available_riders(self, order):
@@ -187,6 +310,10 @@ class OrderViewSet(viewsets.ModelViewSet):
             order.notification_sent_to = notified_ids
             order.notification_sent_at = timezone.now()
             order.save(update_fields=["notification_sent_to", "notification_sent_at"])
+
+        # Push new order to all online riders via WebSocket
+        order_data = _jsonify(OrderSerializer(order).data)
+        _broadcast("all_riders", "new_order", {"order": order_data})
 
     def _ensure_pending_offers_for(self, rider):
         if rider.current_status != "online" or not rider.is_verified:

@@ -3,23 +3,23 @@ import { createRoot } from "react-dom/client";
 import axios from "axios";
 import "./styles.css";
 
-const api = axios.create({
-  baseURL: "http://localhost:8000/api",
-  headers: { "Content-Type": "application/json" },
+// ── Supabase config (same project as the Flutter app) ──────────────────────
+const SUPABASE_URL = "https://aijlvspbunaopspcslcg.supabase.co";
+const SUPABASE_ANON =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFpamx2c3BidW5hb3BzcGNzbGNnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNjg3OTYsImV4cCI6MjA5Njk0NDc5Nn0.JvyQFcd39WuwlhqWVU4PTzufcXLU5Lp8pc8IlfCA98c";
+
+// Hardcoded admin gate — matches the Flutter admin portal.
+const ADMIN_USER = "admin";
+const ADMIN_PASS = "dodoo@123";
+
+const sb = axios.create({
+  baseURL: `${SUPABASE_URL}/rest/v1`,
+  headers: {
+    apikey: SUPABASE_ANON,
+    Authorization: `Bearer ${SUPABASE_ANON}`,
+    "Content-Type": "application/json",
+  },
 });
-
-function formatLocation(location) {
-  if (!location) return "-";
-  const latitude = Number(location.latitude);
-  const longitude = Number(location.longitude);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return "-";
-  return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-}
-
-function mapUrl(location) {
-  if (!location) return "#";
-  return `https://www.google.com/maps/search/?api=1&query=${location.latitude},${location.longitude}`;
-}
 
 function formatMoney(value) {
   const amount = Number(value || 0);
@@ -49,38 +49,29 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 function App() {
-  const [auth, setAuth] = useState({
-    phone: "+91900000012",
-    password: "test123",
-  });
+  const [auth, setAuth] = useState({ username: "admin", password: "" });
   const [token, setToken] = useState(
     localStorage.getItem("dodoo_admin_token") || "",
   );
   const [orders, setOrders] = useState([]);
-  const [riders, setRiders] = useState([]);
-  const [fareConfig, setFareConfig] = useState({
-    rate_per_km: "8.00",
-    minimum_fare: "50.00",
-  });
+  const [riders, setRiders] = useState([]); // online/busy riders + tracking
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [tick, setTick] = useState(0);
   const [order, setOrder] = useState({
-    order_number: `DD-${Date.now().toString().slice(-6)}`,
-    from_address: "Noida Sector 50",
-    from_latitude: 28.5492,
-    from_longitude: 77.3302,
-    to_address: "Customer Location",
-    to_latitude: 28.59,
-    to_longitude: 77.35,
-    items_description: "Food package",
+    from_address: "MG Road, Bengaluru",
+    from_latitude: 12.9716,
+    from_longitude: 77.5946,
+    to_address: "Koramangala, Bengaluru",
+    to_latitude: 12.9352,
+    to_longitude: 77.6245,
+    total_earning: 85,
+    customer_name: "Test Customer",
+    customer_phone: "9876543210",
+    items_description: "1x Food package",
   });
 
-  const authHeaders = useMemo(
-    () => ({ Authorization: `Bearer ${token}` }),
-    [token],
-  );
   const secondsAgo = useMemo(
     () => (lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,22 +80,20 @@ function App() {
 
   useEffect(() => {
     if (token) loadDashboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   useEffect(() => {
     if (!token) return undefined;
     const timer = window.setInterval(loadDashboard, 8000);
     return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
     return () => window.clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    if (token) loadFareConfig();
-  }, [token]);
 
   async function run(fn) {
     setLoading(true);
@@ -117,13 +106,17 @@ function App() {
     }
   }
 
-  async function login() {
-    await run(async () => {
-      const response = await api.post("/riders/login/", auth);
-      localStorage.setItem("dodoo_admin_token", response.data.access_token);
-      setToken(response.data.access_token);
-      setMessage("");
-    });
+  function login() {
+    if (
+      auth.username.trim().toLowerCase() !== ADMIN_USER ||
+      auth.password !== ADMIN_PASS
+    ) {
+      setMessage("Invalid credentials. Use admin / dodoo@123");
+      return;
+    }
+    localStorage.setItem("dodoo_admin_token", "SUPABASE_ADMIN");
+    setToken("SUPABASE_ADMIN");
+    setMessage("");
   }
 
   function logout() {
@@ -137,76 +130,98 @@ function App() {
 
   async function loadDashboard() {
     await run(async () => {
-      const [ordersRes, ridersRes] = await Promise.all([
-        api.get("/orders/", { headers: authHeaders }),
-        api.get("/riders/active/", { headers: authHeaders }),
+      const [ordersRes, ridersRes, trackingRes] = await Promise.all([
+        sb.get("/orders?select=*&order=created_at.desc&limit=100"),
+        sb.get(
+          "/riders?select=id,first_name,last_name,phone,current_status&current_status=in.(online,busy)",
+        ),
+        sb.get(
+          "/rider_tracking?select=rider_id,latitude,longitude,is_tracking&is_tracking=eq.true",
+        ),
       ]);
-      const rawOrders = Array.isArray(ordersRes.data)
-        ? ordersRes.data
-        : ordersRes.data.results || [];
-      rawOrders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      setOrders(rawOrders);
-      setRiders(
-        Array.isArray(ridersRes.data)
-          ? ridersRes.data
-          : ridersRes.data.results || [],
-      );
+
+      const trackingByRider = {};
+      for (const t of trackingRes.data || []) {
+        trackingByRider[t.rider_id] = t;
+      }
+      const mergedRiders = (ridersRes.data || []).map((r) => ({
+        ...r,
+        tracking: trackingByRider[r.id] || null,
+      }));
+
+      setOrders(ordersRes.data || []);
+      setRiders(mergedRiders);
       setLastUpdated(Date.now());
       setMessage("");
-    });
-  }
-
-  async function loadFareConfig() {
-    if (!token) return;
-    await run(async () => {
-      const response = await api.get("/orders/pricing-config/", {
-        headers: authHeaders,
-      });
-      setFareConfig(response.data);
-    });
-  }
-
-  async function saveFareConfig(event) {
-    event.preventDefault();
-    await run(async () => {
-      const response = await api.post("/orders/pricing-config/", fareConfig, {
-        headers: authHeaders,
-      });
-      setFareConfig(response.data);
-      setMessage(
-        `Pricing saved: ${formatMoney(response.data.rate_per_km)}/km, min ${formatMoney(response.data.minimum_fare)}`,
-      );
     });
   }
 
   async function createOrder(event) {
     event.preventDefault();
     await run(async () => {
-      const distanceKm = haversineKm(
-        Number(order.from_latitude),
-        Number(order.from_longitude),
-        Number(order.to_latitude),
-        Number(order.to_longitude),
-      );
+      const distanceKm =
+        Math.round(
+          haversineKm(
+            Number(order.from_latitude),
+            Number(order.from_longitude),
+            Number(order.to_latitude),
+            Number(order.to_longitude),
+          ) * 100,
+        ) / 100;
+
+      const fare = Number(order.total_earning) || 0;
+
       const payload = {
-        ...order,
-        distance_in_km: Math.round(distanceKm * 100) / 100,
-      };
-      const response = await api.post("/orders/", payload, {
-        headers: authHeaders,
-      });
-      setOrders((current) => [response.data, ...current]);
-      setOrder((current) => ({
-        ...current,
         order_number: `DD-${Date.now().toString().slice(-6)}`,
-      }));
+        status: "pending", // unassigned — broadcast to all riders
+        from_address: order.from_address,
+        from_latitude: Number(order.from_latitude),
+        from_longitude: Number(order.from_longitude),
+        to_address: order.to_address,
+        to_latitude: Number(order.to_latitude),
+        to_longitude: Number(order.to_longitude),
+        distance_in_km: distanceKm,
+        estimated_time_minutes: Math.min(180, Math.max(5, Math.round(distanceKm * 4))),
+        total_earning: fare,
+        minimum_fare: fare,
+        customer_name: order.customer_name,
+        customer_phone: order.customer_phone,
+        items_description: order.items_description,
+        status_updated_at: new Date().toISOString(),
+      };
+
+      // 1. Create the order (pending, unassigned).
+      const res = await sb.post("/orders", payload, {
+        headers: { Prefer: "return=representation" },
+      });
+      const created = Array.isArray(res.data) ? res.data[0] : res.data;
+
+      // 2. Broadcast to all approved riders via order_offers. First to accept
+      //    wins; the order then flips to accepted and disappears for the rest.
+      const ridersRes = await sb.get(
+        "/riders?select=id&account_status=eq.approved",
+      );
+      const riderIds = (ridersRes.data || []).map((r) => r.id).filter(Boolean);
+      if (riderIds.length) {
+        const nowIso = new Date().toISOString();
+        const offers = riderIds.map((rid) => ({
+          order_id: created.id,
+          rider_id: rid,
+          is_accepted: false,
+          is_rejected: false,
+          notified_at: nowIso,
+        }));
+        await sb.post("/order_offers", offers);
+      }
+
+      setOrders((current) => [created, ...current]);
       setMessage(
-        `Order ${response.data.order_number} created — ${response.data.distance_in_km} km`,
+        `Order ${created.order_number} broadcast to ${riderIds.length} rider(s) — ${created.distance_in_km} km.`,
       );
     });
   }
 
-  // ── Login page (shown when not authenticated) ───────────────────────────
+  // ── Login page ──────────────────────────────────────────────────────────
   if (!token) {
     return (
       <main className="login-page">
@@ -222,13 +237,13 @@ function App() {
             <p>Admin Portal</p>
           </div>
           <label>
-            Phone
+            Username
             <input
-              type="tel"
+              type="text"
               autoComplete="username"
-              value={auth.phone}
-              onChange={(e) => setAuth({ ...auth, phone: e.target.value })}
-              placeholder="+91900000012"
+              value={auth.username}
+              onChange={(e) => setAuth({ ...auth, username: e.target.value })}
+              placeholder="admin"
             />
           </label>
           <label>
@@ -238,15 +253,11 @@ function App() {
               autoComplete="current-password"
               value={auth.password}
               onChange={(e) => setAuth({ ...auth, password: e.target.value })}
-              placeholder="Password"
+              placeholder="dodoo@123"
             />
           </label>
           {message && <p className="login-error">{message}</p>}
-          <button
-            type="submit"
-            disabled={loading}
-            style={{ marginTop: 8, width: "100%" }}
-          >
+          <button type="submit" disabled={loading} style={{ marginTop: 8, width: "100%" }}>
             {loading ? "Logging in…" : "Log in"}
           </button>
         </form>
@@ -254,20 +265,18 @@ function App() {
     );
   }
 
-  // ── Dashboard (shown when authenticated) ────────────────────────────────
+  // ── Dashboard ─────────────────────────────────────────────────────────────
   return (
     <main className="shell">
       <header className="topbar">
         <div>
           <h1>DoDoo Admin</h1>
-          <p>Dispatch operations</p>
+          <p>Dispatch operations · Supabase</p>
         </div>
         <div className="topbar-right">
           {loading && <span className="dim">Working…</span>}
           {!loading && secondsAgo !== null && (
-            <span className="dim">
-              Updated {secondsAgo}s ago · auto-refresh 8s
-            </span>
+            <span className="dim">Updated {secondsAgo}s ago · auto-refresh 8s</span>
           )}
           <button onClick={loadDashboard} disabled={loading}>
             Refresh
@@ -281,35 +290,6 @@ function App() {
       {message && <p className="dash-message">{message}</p>}
 
       <section className="grid-2col">
-        <form className="panel" onSubmit={saveFareConfig}>
-          <h2>Fare Configuration</h2>
-          <label>
-            Per km amount (Rs)
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={fareConfig.rate_per_km}
-              onChange={(e) =>
-                setFareConfig({ ...fareConfig, rate_per_km: e.target.value })
-              }
-            />
-          </label>
-          <label>
-            Minimum fare (Rs)
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={fareConfig.minimum_fare}
-              onChange={(e) =>
-                setFareConfig({ ...fareConfig, minimum_fare: e.target.value })
-              }
-            />
-          </label>
-          <button disabled={loading}>Save pricing</button>
-        </form>
-
         <form className="panel" onSubmit={createOrder}>
           <h2>Create Order</h2>
           {Object.entries(order).map(([key, value]) => (
@@ -322,38 +302,41 @@ function App() {
             </label>
           ))}
           <p className="field-hint">
-            Distance is auto-calculated from coordinates on the backend.
+            Distance auto-calculated from coordinates. The order is{" "}
+            <strong>broadcast to all approved riders</strong> — the first to
+            accept gets it, and it disappears for everyone else. The customer
+            phone stays private (riders call support instead).
           </p>
-          <button disabled={loading}>Create order</button>
+          <button disabled={loading}>Broadcast order</button>
         </form>
-      </section>
 
-      <section className="panel">
-        <h2>
-          Active Riders
-          <small className="section-sub">
-            (busy riders shown only if delivery destination is within 15 km)
-          </small>
-        </h2>
-        <div className="rider-grid">
-          {riders.map((rider) => (
-            <article className="rider-card" key={rider.id}>
-              <strong>
-                {rider.first_name || "Rider"} {rider.last_name || ""}
-              </strong>
-              <span>{rider.phone}</span>
-              <span className={`badge ${rider.current_status}`}>
-                {rider.current_status}
-              </span>
-              <small>
-                {rider.tracking
-                  ? `📍 ${rider.tracking.latitude}, ${rider.tracking.longitude}`
-                  : "No live location"}
-              </small>
-            </article>
-          ))}
-          {!riders.length && <p className="empty">No riders online or busy.</p>}
-        </div>
+        <section className="panel">
+          <h2>
+            Active Riders
+            <small className="section-sub"> (online / busy)</small>
+          </h2>
+          <div className="rider-grid">
+            {riders.map((rider) => (
+              <article className="rider-card" key={rider.id}>
+                <strong>
+                  {rider.first_name || "Rider"} {rider.last_name || ""}
+                </strong>
+                <span>{rider.phone}</span>
+                <span className={`badge ${rider.current_status}`}>
+                  {rider.current_status}
+                </span>
+                <small>
+                  {rider.tracking
+                    ? `📍 ${Number(rider.tracking.latitude).toFixed(5)}, ${Number(
+                        rider.tracking.longitude,
+                      ).toFixed(5)}`
+                    : "No live location"}
+                </small>
+              </article>
+            ))}
+            {!riders.length && <p className="empty">No riders online or busy.</p>}
+          </div>
+        </section>
       </section>
 
       <section className="panel">
@@ -372,7 +355,6 @@ function App() {
             <span>Fare</span>
             <span>Pickup</span>
             <span>Drop</span>
-            {/*<span>Delivery Location</span>*/}
             <span>Created</span>
           </div>
           {orders.map((item) => (
@@ -380,48 +362,24 @@ function App() {
               <span>{item.order_number}</span>
               <span>
                 <span className={`badge ${item.status}`}>
-                  {item.status.replace(/_/g, " ")}
+                  {String(item.status || "").replace(/_/g, " ")}
                 </span>
               </span>
               <span>
-                {item.assigned_rider_phone || (
+                {item.assigned_rider_id ? (
+                  <span title={item.assigned_rider_id}>Assigned</span>
+                ) : (
                   <span className="dim">Unassigned</span>
                 )}
               </span>
               <span>{item.distance_in_km} km</span>
-              <span>
-                {formatMoney(item.total_earning)}
-                <small>
-                  {formatMoney(item.rate_per_km)}/km · min{" "}
-                  {formatMoney(item.minimum_fare)}
-                </small>
-              </span>
+              <span>{formatMoney(item.total_earning)}</span>
               <span>{item.from_address}</span>
               <span>{item.to_address}</span>
-              {/* <span>
-                {item.delivery_location ? (
-                  <a
-                    href={mapUrl(item.delivery_location)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {formatLocation(item.delivery_location)}
-                    <small>
-                      {item.delivery_location.source === "live"
-                        ? "🟢 Live"
-                        : "⚪ Last known"}
-                    </small>
-                  </a>
-                ) : (
-                  <span className="dim">—</span>
-                )}
-              </span> */}
               <span>{formatTime(item.created_at)}</span>
             </div>
           ))}
-          {!orders.length && (
-            <p className="empty">No orders yet. Create one above.</p>
-          )}
+          {!orders.length && <p className="empty">No orders yet. Create one above.</p>}
         </div>
       </section>
     </main>

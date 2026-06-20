@@ -21,6 +21,14 @@ class Rider(AbstractUser):
     aadhar_front = models.FileField(upload_to='aadhar_front/', null=True, blank=True)
     aadhar_back = models.FileField(upload_to='aadhar_back/', null=True, blank=True)
     
+    ACCOUNT_STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('suspended', 'Suspended'),
+    ]
+    account_status = models.CharField(max_length=20, choices=ACCOUNT_STATUS_CHOICES, default='pending')
+
     current_status = models.CharField(max_length=20, choices=RIDER_STATUS_CHOICES, default='offline')
     current_latitude = models.FloatField(null=True, blank=True)
     current_longitude = models.FloatField(null=True, blank=True)
@@ -36,6 +44,9 @@ class Rider(AbstractUser):
     
     fcm_token = models.TextField(null=True, blank=True)
     is_verified = models.BooleanField(default=False)
+
+    # Demo OTP — stores the last generated OTP so it can be verified
+    current_otp = models.CharField(max_length=6, null=True, blank=True)
     is_document_verified = models.BooleanField(default=False)
     
     joined_date = models.DateTimeField(auto_now_add=True)
@@ -74,7 +85,30 @@ class RiderRating(models.Model):
     rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
     comment = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         db_table = 'rider_ratings'
         ordering = ['-created_at']
+
+
+class RiderApprovalLog(models.Model):
+    ACTION_CHOICES = [
+        ('registered', 'Registered'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('suspended', 'Suspended'),
+        ('reactivated', 'Reactivated'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    rider = models.ForeignKey(Rider, on_delete=models.CASCADE, related_name='approval_logs')
+    admin = models.ForeignKey(
+        Rider, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='admin_actions',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    reason = models.TextField(null=True, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'rider_approval_logs'
+        ordering = ['-timestamp']

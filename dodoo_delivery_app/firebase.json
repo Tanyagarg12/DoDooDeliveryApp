@@ -1,0 +1,38 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default"
+    }
+  ],
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "dodoo-admin-refresh",
+          "appId": "1:28332338228:android:88fb24b997b69c7d9cee61",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "dodoo-admin-refresh",
+          "configurations": {
+            "android": "1:28332338228:android:88fb24b997b69c7d9cee61",
+            "ios": "1:28332338228:ios:da9449dcc91eedf29cee61",
+            "macos": "1:28332338228:ios:da9449dcc91eedf29cee61",
+            "web": "1:28332338228:web:6bc42c593be1bf829cee61",
+            "windows": "1:28332338228:web:66ce46f700edf5c29cee61"
+          }
+        }
+      }
+    }
+  }
+}

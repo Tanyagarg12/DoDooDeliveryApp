@@ -2,6 +2,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Background location + foreground service for live tracking while delivering -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="DoDoo Rider"
@@ -30,6 +36,18 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- ════════════════════════════════════════════════════════════════
+             GOOGLE MAPS API KEY  —  REPLACE THE PLACEHOLDER BELOW
+             1. Go to https://console.cloud.google.com/google/maps-apis
+             2. Enable "Maps SDK for Android" (and "Directions API" for routes).
+             3. Create an API key, restrict it to your app's package + SHA-1.
+             4. Paste it as the android:value below (or inject via manifestPlaceholders).
+             Until a real key is set, the map tiles will render blank/grey.
+             ════════════════════════════════════════════════════════════════ -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="YOUR_GOOGLE_MAPS_API_KEY_HERE" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

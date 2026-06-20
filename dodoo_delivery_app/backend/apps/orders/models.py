@@ -50,6 +50,10 @@ class Order(models.Model):
     picked_up_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     
+    # Customer details
+    customer_name = models.CharField(max_length=100, blank=True, default='')
+    customer_phone = models.CharField(max_length=20, blank=True, default='')
+
     # Notifications
     notification_sent_to = models.JSONField(default=list, help_text="List of rider IDs notified")
     notification_sent_at = models.DateTimeField(null=True, blank=True)

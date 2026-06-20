@@ -4,6 +4,19 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- ══════════ Location permissions for live tracking ══════════ -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>DoDoo Rider needs your location to show your position on the map and share it with customers during deliveries.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>DoDoo Rider needs background location to keep tracking your delivery route even when the app is minimized.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>DoDoo Rider needs background location to keep tracking your delivery route even when the app is minimized.</string>
+	<!-- Allow location updates while backgrounded during an active delivery -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

@@ -1,11 +1,11 @@
 {
-    "name": "dodoo_delivery_app",
-    "short_name": "dodoo_delivery_app",
+    "name": "DoDoo Rider",
+    "short_name": "DoDoo",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F6F7E8",
+    "theme_color": "#BABC2F",
+    "description": "DoDoo Rider — Anything for you. Delivery partner app.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "28332338228",
+    "project_id": "dodoo-admin-refresh",
+    "storage_bucket": "dodoo-admin-refresh.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:28332338228:android:88fb24b997b69c7d9cee61",
+        "android_client_info": {
+          "package_name": "com.dodoo.delivery.rider"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9_i3DEJrpHYr9xtyv4jV15esHQNbpQz0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -5,6 +5,18 @@ from django.http import JsonResponse
 from django.urls import include, path
 
 
+def health_check(request):
+    """Lightweight DB + server liveness probe used by the Flutter test-connection button."""
+    from django.db import connection
+    try:
+        with connection.cursor() as cur:
+            cur.execute("SELECT 1")
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return JsonResponse({"status": "ok" if db_ok else "db_error", "db": "connected" if db_ok else "error"})
+
+
 def api_home(request):
     return JsonResponse(
         {
@@ -24,6 +36,7 @@ def api_home(request):
 
 urlpatterns = [
     path("", api_home, name="api-home"),
+    path("api/health/", health_check, name="health-check"),
     path("admin/", admin.site.urls),
     path("api/riders/", include("apps.riders.urls")),
     path("api/orders/", include("apps.orders.urls")),
