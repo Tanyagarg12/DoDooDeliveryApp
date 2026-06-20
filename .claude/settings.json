@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sS -m 30 -X POST \"https://www.dodoo.in:5678/MyService.svc/GetAllTypeOrdersByCityStatusCombi\" -H \"Content-Type: application/json\" -d '{\"CityCode\":\"ATP\",\"Statuslist\":[\"Open\",\"Accept\",\"InProgress\"]}')",
+      "Bash(curl -sS -m 30 \"https://www.dodoo.in:5678/MyService.svc/GetPickDropByOrderID/PDP20180825171202255\")",
+      "Bash(curl -sS -m 30 \"https://www.dodoo.in:5678/MyService.svc/GetStoreOrdersByOrderID/STOR20180825171202255\")",
+      "Bash(curl -sS -m 30 \"https://www.dodoo.in:5678/MyService.svc/ValidateSignup/9849475689\")",
+      "Bash(sed -i \"s|'/': \\(_\\) => const PhoneInputScreen\\(\\),|'/': \\(_\\) => const AdminImportOrdersScreen\\(\\), // TEMP|\" lib/main.dart)",
+      "Bash(sed -i \"s|import 'features/admin/presentation/screens/admin_login_screen.dart';|import 'features/admin/presentation/screens/admin_login_screen.dart';\\\\nimport 'features/admin/presentation/screens/admin_import_orders_screen.dart';|\" lib/main.dart)",
+      "Bash(sed -i \"s|        '/': \\(_\\) => const AdminImportOrdersScreen\\(\\), // TEMP|        '/': \\(_\\) => const PhoneInputScreen\\(\\),|\" lib/main.dart)",
+      "Bash(sed -i \"\\\\|import 'features/admin/presentation/screens/admin_import_orders_screen.dart';|d\" lib/main.dart)",
+      "Bash(curl -sS -m 15 -D - -o /dev/null -X POST \"https://www.dodoo.in:5678/MyService.svc/GetAllTypeOrdersByCityStatusCombi\" -H \"Content-Type: application/json\" -H \"Origin: http://localhost:55793\" -d '{\"CityCode\":\"ATP\",\"Statuslist\":[\"Open\"]}')"
+    ]
+  }
+}
