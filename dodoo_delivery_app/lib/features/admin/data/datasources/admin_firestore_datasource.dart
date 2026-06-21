@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -23,23 +26,34 @@ class AdminFirestoreDataSource {
     }
   }
 
-  /// The current admin password, stored at app_settings/admin_password.
-  /// Falls back to the default until it's been changed.
-  Future<String> _currentPassword() async {
+  static String _hash(String s) => sha256.convert(utf8.encode(s)).toString();
+
+  /// Raw stored value at app_settings/admin_password (a SHA-256 hash going
+  /// forward; possibly legacy plaintext or null if never set).
+  Future<String?> _rawStored() async {
     try {
       final doc = await Db.appSettings.doc('admin_password').get();
-      final v = doc.data()?['value']?.toString();
-      return (v != null && v.isNotEmpty) ? v : _defaultPassword;
+      return doc.data()?['value']?.toString();
     } catch (_) {
-      return _defaultPassword;
+      return null;
     }
   }
 
-  /// Changes the admin password (verifying the current one first).
+  /// True if [input] is the current admin password. Stored as a hash now;
+  /// falls back to the default (unset) and tolerates legacy plaintext values.
+  Future<bool> _passwordMatches(String input) async {
+    final stored = await _rawStored();
+    if (stored == null || stored.isEmpty) return input == _defaultPassword;
+    final looksHashed =
+        stored.length == 64 && RegExp(r'^[0-9a-f]+$').hasMatch(stored);
+    return looksHashed ? _hash(input) == stored : input == stored;
+  }
+
+  /// Changes the admin password (verifying the current one first). Stored as a
+  /// SHA-256 hash so reading the settings doc can't reveal the password.
   Future<void> changePassword(String current, String newPassword) async {
     await _ensureAnonSession();
-    final stored = await _currentPassword();
-    if (current != stored) {
+    if (!await _passwordMatches(current)) {
       throw Exception('Current password is incorrect.');
     }
     final next = newPassword.trim();
@@ -48,7 +62,7 @@ class AdminFirestoreDataSource {
     }
     await Db.appSettings
         .doc('admin_password')
-        .set({'value': next}, SetOptions(merge: true));
+        .set({'value': _hash(next)}, SetOptions(merge: true));
   }
 
   // ── Token persistence ────────────────────────────────────────────────────
@@ -79,7 +93,7 @@ class AdminFirestoreDataSource {
     }
     // Need the anonymous session first so we can read the stored password.
     await _ensureAnonSession();
-    if (password != await _currentPassword()) {
+    if (!await _passwordMatches(password)) {
       throw Exception('Invalid username or password.');
     }
     await saveToken(_sessionToken);
