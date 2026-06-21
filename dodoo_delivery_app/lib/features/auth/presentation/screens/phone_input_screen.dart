@@ -304,7 +304,7 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'A 6-digit OTP will be sent to your number. New riders '
+                        'A 4-digit OTP will be sent to your number. New riders '
                         'are reviewed by our team before going live.',
                         style: TextStyle(
                             fontSize: 12.5, color: Colors.grey.shade700),
@@ -315,16 +315,6 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
               ),
             ),
 
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: () => Navigator.pushNamed(context, '/admin'),
-              icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
-              label: const Text('Admin Portal'),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.grey.shade500,
-                textStyle: const TextStyle(fontSize: 12),
-              ),
-            ),
             const SizedBox(height: 16),
           ],
         ),

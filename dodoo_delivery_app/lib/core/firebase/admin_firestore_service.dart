@@ -144,6 +144,31 @@ class AdminFirestoreService {
     await batch.commit();
   }
 
+  /// Pull-sync: cancels our still-**pending** orders (in the synced cities)
+  /// that DoDoo no longer lists as open — i.e. DoDoo cancelled/closed them.
+  /// Only touches `pending` orders, so a rider's in-progress delivery is never
+  /// affected. Returns how many were cancelled.
+  Future<int> cancelMissingPending(
+    Set<String> openOrderNumbers,
+    Set<String> cityCodes,
+  ) async {
+    final snap = await Db.orders.where('status', isEqualTo: 'pending').get();
+    var count = 0;
+    for (final d in snap.docs) {
+      final m = d.data();
+      final city = m['city_code']?.toString() ?? '';
+      if (!cityCodes.contains(city)) continue; // only reconcile synced cities
+      final on = m['order_number']?.toString() ?? '';
+      if (on.isEmpty || openOrderNumbers.contains(on)) continue;
+      await d.reference.update({
+        'status': 'cancelled',
+        'status_updated_at': FieldValue.serverTimestamp(),
+      });
+      count++;
+    }
+    return count;
+  }
+
   // ── App settings ─────────────────────────────────────────────────────────
   // Stored as app_settings/{key} { value: "<string>" }.
 

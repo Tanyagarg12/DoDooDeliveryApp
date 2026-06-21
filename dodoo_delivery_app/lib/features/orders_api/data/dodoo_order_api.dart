@@ -51,11 +51,62 @@ class DodooOrderApi {
   Future<DodooOrder?> getStoreOrderDetail(String orderId) =>
       _detail('/GetStoreOrdersByOrderID/$orderId');
 
-  /// Fetches detail by routing on the OrderID prefix (PDP… vs STOR…).
-  Future<DodooOrder?> getOrderDetail(String orderId) {
+  /// Fetches detail by routing on the order type. IDs are city-prefixed
+  /// (e.g. "ATP_STOR…" / "ATP_PDP…"), so we match on a substring, and prefer
+  /// an explicit [orderType] ("Store" / "PickDrop") from the list when present.
+  Future<DodooOrder?> getOrderDetail(String orderId, {String? orderType}) {
     final id = orderId.toUpperCase();
-    if (id.startsWith('STOR')) return getStoreOrderDetail(orderId);
+    final isStore =
+        (orderType?.toLowerCase() == 'store') || id.contains('STOR');
+    if (isStore) return getStoreOrderDetail(orderId);
     return getPickDropDetail(orderId);
+  }
+
+  /// Maps our internal order status to DoDoo's status word.
+  /// Returns null for statuses there's nothing to push (e.g. 'pending').
+  static String? dodooStatusFor(String internalStatus) {
+    switch (internalStatus) {
+      case 'accepted':
+        return 'Accept';
+      case 'picked_up':
+      case 'in_transit':
+      case 'reached':
+        return 'OnGoing';
+      case 'completed':
+        return 'Delivered';
+      case 'cancelled':
+        return 'Cancelled';
+      default:
+        return null;
+    }
+  }
+
+  /// Pushes an order's status back to DoDoo. Best-effort and **no-op until
+  /// [DodooApiConfig.statusUpdatePath] is configured** — never throws to the
+  /// caller, so a DoDoo hiccup can't block the rider/admin flow.
+  Future<void> pushStatus({
+    required String orderId,
+    required String internalStatus,
+    String? riderId,
+  }) async {
+    final path = DodooApiConfig.statusUpdatePath;
+    if (path.isEmpty || orderId.isEmpty) return; // endpoint not configured yet
+    final dodooStatus = dodooStatusFor(internalStatus);
+    if (dodooStatus == null) return;
+    final body = {
+      'OrderID': orderId,
+      'Status': dodooStatus,
+      if (riderId != null && riderId.isNotEmpty) 'BoyID': riderId,
+    };
+    try {
+      if (DodooApiConfig.statusUpdateMethod.toUpperCase() == 'GET') {
+        await _dio.get<dynamic>('$path/$orderId/$dodooStatus');
+      } else {
+        await _dio.post<dynamic>(path, data: body);
+      }
+    } catch (_) {
+      // Best-effort — DoDoo sync failures must not break the app flow.
+    }
   }
 
   /// GET ValidateSignup/{phone} → returns the OTP code (Result) or null.

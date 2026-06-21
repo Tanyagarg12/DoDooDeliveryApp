@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/constants/order_status.dart';
 import '../../../../core/firebase/admin_firestore_service.dart';
 import '../../../../core/widgets/support_modal.dart';
+import '../../../orders_api/data/dodoo_order_api.dart';
 
 /// Admin order detail — full order info plus management actions:
 /// cancel, reassign to a specific rider, or re-broadcast to all riders.
@@ -27,6 +28,7 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
   bool _changed = false; // whether to tell the list to refresh on pop
 
   final _admin = AdminFirestoreService.instance;
+  final _dodoo = DodooOrderApi();
 
   @override
   void initState() {
@@ -64,6 +66,17 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
     setState(() => _busy = true);
     try {
       await _admin.updateOrder(widget.orderId, patch);
+      // Push the status change back to DoDoo (no-op until endpoint configured).
+      final newStatus = patch['status']?.toString();
+      if (newStatus != null) {
+        _dodoo
+            .pushStatus(
+              orderId: _order?['order_number']?.toString() ?? '',
+              internalStatus: newStatus,
+              riderId: patch['assigned_rider_id']?.toString(),
+            )
+            .ignore();
+      }
       _changed = true;
       await _load();
       if (mounted) {
@@ -242,14 +255,26 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
         ]),
         const SizedBox(height: 12),
 
-        _card('Customer & Items', [
+        _card('Customer', [
           _kv('Name', o['customer_name']?.toString() ?? '—'),
           const SizedBox(height: 8),
           _kv('Phone (admin only)', phone.isEmpty ? '—' : phone),
-          const SizedBox(height: 8),
-          _kv('Items',
-              (o['items_description'] ?? o['items'])?.toString() ?? '—'),
+          if ((o['store_name']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _kv('Store', o['store_name'].toString()),
+          ],
+          if ((o['payment_mode']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _kv('Payment', o['payment_mode'].toString()),
+          ],
+          if ((o['validation_code']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _kv('Delivery code', o['validation_code'].toString()),
+          ],
         ]),
+        const SizedBox(height: 12),
+
+        _ItemsCard(order: o),
         const SizedBox(height: 12),
 
         _card('Assignment', [
@@ -399,6 +424,101 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
     final l = dt.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(l.day)}/${two(l.month)} ${two(l.hour)}:${two(l.minute)}';
+  }
+}
+
+// ── Items + pricing card ──────────────────────────────────────────────────────
+
+class _ItemsCard extends StatelessWidget {
+  const _ItemsCard({required this.order});
+  final Map<String, dynamic> order;
+
+  static const _teal = Color(0xFFBABC2F);
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = (order['cart_items'] as List?) ?? const [];
+    final desc = (order['items_description'] ?? '').toString();
+    final hasPricing = order['items_subtotal'] != null ||
+        order['delivery_charge'] != null ||
+        order['tax'] != null ||
+        order['order_total'] != null;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFD7E3E1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Items',
+              style: TextStyle(
+                  fontWeight: FontWeight.w800, fontSize: 14, color: _teal)),
+          const SizedBox(height: 12),
+          if (cart.isEmpty && desc.isEmpty)
+            const Text('—', style: TextStyle(fontSize: 13))
+          else if (cart.isEmpty)
+            Text(desc, style: const TextStyle(fontSize: 13))
+          else
+            ...cart.map((raw) {
+              final i = Map<String, dynamic>.from(raw as Map);
+              final t = (i['Title'] ?? 'Item').toString();
+              final q = (i['Qty'] ?? '1').toString();
+              final p = (i['Price'] ?? '').toString();
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text('$t   ×$q',
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                    ),
+                    if (p.isNotEmpty)
+                      Text('₹$p',
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              );
+            }),
+          if (hasPricing) ...[
+            const Divider(height: 20),
+            _priceRow('Items subtotal', order['items_subtotal']),
+            _priceRow('Delivery charge', order['delivery_charge']),
+            _priceRow('Tax', order['tax']),
+            _priceRow('Total', order['order_total'], bold: true),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _priceRow(String label, dynamic value, {bool bold = false}) {
+    if (value == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: bold ? 14 : 12.5,
+                    color: bold ? const Color(0xFF1C1D00) : Colors.black54,
+                    fontWeight: bold ? FontWeight.w800 : FontWeight.w500)),
+          ),
+          Text('₹$value',
+              style: TextStyle(
+                  fontSize: bold ? 15 : 13,
+                  fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
+                  color: bold ? _teal : const Color(0xFF1C1D00))),
+        ],
+      ),
+    );
   }
 }
 

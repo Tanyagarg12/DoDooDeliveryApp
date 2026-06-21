@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+
+import '../session/rider_session.dart';
 
 /// Central Firestore service — all collections live here.
 ///
@@ -23,7 +24,8 @@ class FirestoreService {
   CollectionReference get _withdrawals => _db.collection('withdrawal_requests');
   CollectionReference get _walletTxns => _db.collection('wallet_transactions');
 
-  String get currentUid => FirebaseAuth.instance.currentUser!.uid;
+  /// The logged-in rider's doc id (their phone number). Set at OTP verification.
+  String get currentUid => RiderSession.riderId ?? '';
 
   // ── Rider ──────────────────────────────────────────────────────────────────
 

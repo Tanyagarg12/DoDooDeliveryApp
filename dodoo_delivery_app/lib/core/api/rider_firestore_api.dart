@@ -1,15 +1,17 @@
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../cloudinary/cloudinary_service.dart';
 import '../firebase/firestore_service.dart';
+import '../../features/orders_api/data/dodoo_order_api.dart';
 
 /// Drop-in replacement for [RiderApi] that reads/writes Firestore instead of
 /// calling a Django REST backend.  All method signatures are identical so the
 /// dashboard controller and home shell don't need structural changes.
 class RiderFirestoreApi {
   final _fs = FirestoreService.instance;
+  final _dodoo = DodooOrderApi();
 
   /// Kept for WebSocket compatibility — returns empty string so the WS service
   /// skips the connection attempt when no token is present.
@@ -28,14 +30,32 @@ class RiderFirestoreApi {
 
   // ── Orders ────────────────────────────────────────────────────────────────
 
-  Future<Map<String, dynamic>> acceptOrder(String orderId) =>
-      _fs.acceptOrder(orderId);
+  Future<Map<String, dynamic>> acceptOrder(String orderId) async {
+    final res = await _fs.acceptOrder(orderId);
+    _dodoo
+        .pushStatus(
+          orderId: res['order_number']?.toString() ?? '',
+          internalStatus: 'accepted',
+          riderId: _fs.currentUid,
+        )
+        .ignore();
+    return res;
+  }
 
   Future<void> rejectOrder(String orderId) => _fs.rejectOrder(orderId);
 
   Future<Map<String, dynamic>> updateOrderStatus(
-          String orderId, String status) =>
-      _fs.updateOrderStatus(orderId, status);
+      String orderId, String status) async {
+    final res = await _fs.updateOrderStatus(orderId, status);
+    _dodoo
+        .pushStatus(
+          orderId: res['order_number']?.toString() ?? '',
+          internalStatus: status,
+          riderId: _fs.currentUid,
+        )
+        .ignore();
+    return res;
+  }
 
   // ── History ───────────────────────────────────────────────────────────────
 
@@ -117,17 +137,18 @@ class RiderFirestoreApi {
 
   // ── Documents ─────────────────────────────────────────────────────────────
 
-  /// Uploads a document image to Firebase Storage and flags docs for re-approval.
+  /// Uploads a document image to Cloudinary and flags docs for re-approval.
   /// [docType]: 'aadhar_front' | 'aadhar_back' | 'license'
   Future<Map<String, dynamic>> saveDocument({
     required String docType,
     required XFile image,
   }) async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final bytes = await image.readAsBytes();
-    final ref = FirebaseStorage.instance.ref('rider_documents/$uid/$docType.jpg');
-    await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
-    final url = await ref.getDownloadURL();
+    final url = await CloudinaryService.instance.uploadFile(
+      image.path,
+      folder: 'rider_documents/$uid',
+      publicId: docType,
+    );
 
     const colMap = {
       'aadhar_front': 'aadhar_front_url',
@@ -152,12 +173,8 @@ class RiderFirestoreApi {
 
     if (photo != null) {
       final uid = FirebaseAuth.instance.currentUser!.uid;
-      final ref = FirebaseStorage.instance.ref('profile_pictures/$uid.jpg');
-      final bytes = await photo.readAsBytes();
-      await ref.putData(bytes,
-          SettableMetadata(contentType: 'image/jpeg'));
-      final url = await ref.getDownloadURL();
-      updates['profile_picture_url'] = url;
+      updates['profile_picture_url'] = await CloudinaryService.instance
+          .uploadFile(photo.path, folder: 'profile_pictures', publicId: uid);
     }
 
     await _fs.updateRider(updates);

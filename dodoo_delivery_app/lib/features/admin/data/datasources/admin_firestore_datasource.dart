@@ -11,8 +11,45 @@ import '../models/admin_models.dart';
 class AdminFirestoreDataSource {
   static const _keyAdminToken = 'admin_access_token';
   static const _adminUsername = 'admin';
-  static const _adminPassword = 'dodoo@123';
+  static const _defaultPassword = 'dodoo@123';
   static const _sessionToken = 'FIREBASE_ADMIN_SESSION';
+
+  /// Ensures the anonymous Firebase session needed for Firestore rules.
+  Future<void> _ensureAnonSession() async {
+    if (FirebaseAuth.instance.currentUser == null) {
+      try {
+        await FirebaseAuth.instance.signInAnonymously();
+      } catch (_) {/* Anonymous sign-in must be enabled in the console */}
+    }
+  }
+
+  /// The current admin password, stored at app_settings/admin_password.
+  /// Falls back to the default until it's been changed.
+  Future<String> _currentPassword() async {
+    try {
+      final doc = await Db.appSettings.doc('admin_password').get();
+      final v = doc.data()?['value']?.toString();
+      return (v != null && v.isNotEmpty) ? v : _defaultPassword;
+    } catch (_) {
+      return _defaultPassword;
+    }
+  }
+
+  /// Changes the admin password (verifying the current one first).
+  Future<void> changePassword(String current, String newPassword) async {
+    await _ensureAnonSession();
+    final stored = await _currentPassword();
+    if (current != stored) {
+      throw Exception('Current password is incorrect.');
+    }
+    final next = newPassword.trim();
+    if (next.length < 4) {
+      throw Exception('New password must be at least 4 characters.');
+    }
+    await Db.appSettings
+        .doc('admin_password')
+        .set({'value': next}, SetOptions(merge: true));
+  }
 
   // ── Token persistence ────────────────────────────────────────────────────
 
@@ -37,20 +74,13 @@ class AdminFirestoreDataSource {
     String username,
     String password,
   ) async {
-    if (username.trim().toLowerCase() != _adminUsername ||
-        password != _adminPassword) {
+    if (username.trim().toLowerCase() != _adminUsername) {
       throw Exception('Invalid username or password.');
     }
-    // The admin isn't a Firebase user, but Firestore/Storage rules require an
-    // authenticated session. Sign in anonymously so admin reads/writes pass.
-    // (Requires Anonymous sign-in enabled in the Firebase console.)
-    if (FirebaseAuth.instance.currentUser == null) {
-      try {
-        await FirebaseAuth.instance.signInAnonymously();
-      } catch (_) {
-        // Best-effort — if Anonymous auth is disabled, login still proceeds but
-        // Firestore reads will be denied until it's enabled.
-      }
+    // Need the anonymous session first so we can read the stored password.
+    await _ensureAnonSession();
+    if (password != await _currentPassword()) {
+      throw Exception('Invalid username or password.');
     }
     await saveToken(_sessionToken);
     return (

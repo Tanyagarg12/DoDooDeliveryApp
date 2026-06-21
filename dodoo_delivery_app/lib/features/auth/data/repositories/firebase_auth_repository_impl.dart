@@ -1,27 +1,51 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
-import '../../../../core/firebase/firebase_auth_service.dart';
+import '../../../../core/cloudinary/cloudinary_service.dart';
 import '../../../../core/firebase/firestore_service.dart';
-import '../../../../core/firebase/storage_service.dart';
+import '../../../../core/session/rider_session.dart';
 import '../../../../core/storage/secure_storage.dart';
+import '../../../../core/errors/exceptions.dart';
+import '../../../orders_api/data/dodoo_order_api.dart';
 import '../../domain/entities/rider_entity.dart';
 import '../../domain/repositories/auth_repository.dart';
 import '../models/rider_model.dart';
 
+/// Auth backed by:
+///  • the external **DoDoo OTP API** for phone verification (no Firebase Phone
+///    Auth / Blaze needed), and
+///  • **Firestore** for rider data, with an anonymous Firebase session so the
+///    security rules pass.
+///
+/// Riders are identified by their **phone number**, which is also their
+/// Firestore `riders` document id (see [RiderSession]).
 class FirebaseAuthRepositoryImpl implements AuthRepository {
   FirebaseAuthRepositoryImpl({required SecureStorageService storage})
       : _storage = storage;
 
   final SecureStorageService _storage;
-  final _auth = FirebaseAuthService.instance;
   final _fs = FirestoreService.instance;
+  final _dodoo = DodooOrderApi();
 
-  // Held in memory between register() and verifyOtp() calls
+  // Held in memory between calls.
   RegistrationData? _pendingRegistration;
+  String? _pendingOtp;
+
+  static String _digits(String phone) => phone.replaceAll(RegExp(r'[^0-9]'), '');
+
+  /// Anonymous Firebase session so Firestore rules (`request.auth != null`) pass.
+  Future<void> _ensureAnonSession() async {
+    if (FirebaseAuth.instance.currentUser == null) {
+      try {
+        await FirebaseAuth.instance.signInAnonymously();
+      } catch (_) {/* Anonymous sign-in must be enabled in the console */}
+    }
+  }
 
   @override
   Future<CheckPhoneResult> checkPhone(String phone) async {
-    final rider = await _fs.findRiderByPhone(phone);
+    await _ensureAnonSession();
+    final id = _digits(phone);
+    final rider = await _fs.getRider(id);
     if (rider == null) {
       return CheckPhoneResult(exists: false, phone: phone);
     }
@@ -36,8 +60,14 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
 
   @override
   Future<String> sendOtp(String phone) async {
-    await _auth.sendOtp(phone);
-    return ''; // Firebase handles OTP natively — no dev_otp needed
+    // DoDoo generates + SMSes the OTP and returns the code.
+    final otp = await _dodoo.validateSignup(_digits(phone));
+    if (otp == null || otp.isEmpty) {
+      throw const ServerException('Could not send OTP. Please try again.');
+    }
+    _pendingOtp = otp.trim();
+    // Return empty so the code is NOT shown on screen — the rider gets it by SMS.
+    return '';
   }
 
   @override
@@ -45,18 +75,23 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
     required String phone,
     required String otp,
   }) async {
-    final user = await _auth.verifyOtp(otp);
+    if (_pendingOtp == null || otp.trim() != _pendingOtp) {
+      throw const UnauthorizedException();
+    }
+    final id = _digits(phone);
+    await _ensureAnonSession();
+    RiderSession.riderId = id;
 
-    final existing = await _fs.getRider(user.uid);
+    final existing = await _fs.getRider(id);
     Map<String, dynamic> riderData;
 
     if (existing != null) {
       riderData = existing;
     } else {
-      // New user — create Firestore document from pending registration
+      // New rider — create the Firestore doc (id == phone) from registration.
       final reg = _pendingRegistration;
       final data = <String, dynamic>{
-        'phone': phone,
+        'phone': id,
         'first_name': reg?.firstName ?? '',
         'last_name': reg?.lastName ?? '',
         'email': reg?.email ?? '',
@@ -64,47 +99,53 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
         'aadhar_number': reg?.aadhaarNumber ?? '',
         'driving_license_number': reg?.drivingLicenseNumber ?? '',
       };
-      // Upload the photo + KYC documents to Firebase Storage (best-effort —
-      // a failed upload shouldn't block account creation).
       if (reg != null) {
-        await _uploadRegistrationDocs(user.uid, reg, data);
+        await _uploadRegistrationDocs(id, reg, data);
       }
-      await _fs.createRider(user.uid, data);
+      await _fs.createRider(id, data);
       _pendingRegistration = null;
-      riderData = {...data, 'id': user.uid, 'account_status': 'pending'};
+      riderData = {...data, 'id': id, 'account_status': 'pending'};
     }
 
     final rider = RiderModel.fromJson(riderData);
     await _storage.saveRiderJson(rider.toJsonString());
+    _pendingOtp = null;
     return rider;
   }
 
   @override
   Future<void> register(RegistrationData data) async {
-    // Store locally — the actual Firestore write happens after OTP verification
+    // Store locally — the Firestore write happens after OTP verification.
     _pendingRegistration = data;
   }
 
-  /// Uploads the registration photo + KYC images to Firebase Storage and adds
-  /// their URLs into [data]. Each upload is best-effort.
+  /// Uploads the registration photo + KYC images to Cloudinary and adds their
+  /// URLs into [data]. Each upload is best-effort. [id] is the rider's phone.
   Future<void> _uploadRegistrationDocs(
-    String uid,
+    String id,
     RegistrationData reg,
     Map<String, dynamic> data,
   ) async {
-    final jobs = <String, ({String field, String path})>{
-      'profile': (field: 'profile_picture_url', path: 'profile_pictures/$uid.jpg'),
+    final jobs = <String, ({String field, String folder, String publicId})>{
+      'profile': (
+        field: 'profile_picture_url',
+        folder: 'profile_pictures',
+        publicId: id
+      ),
       'aadhar_front': (
         field: 'aadhar_front_url',
-        path: 'rider_documents/$uid/aadhar_front.jpg'
+        folder: 'rider_documents/$id',
+        publicId: 'aadhar_front'
       ),
       'aadhar_back': (
         field: 'aadhar_back_url',
-        path: 'rider_documents/$uid/aadhar_back.jpg'
+        folder: 'rider_documents/$id',
+        publicId: 'aadhar_back'
       ),
       'license': (
         field: 'driving_license_image_url',
-        path: 'rider_documents/$uid/license.jpg'
+        folder: 'rider_documents/$id',
+        publicId: 'license'
       ),
     };
     final locals = <String, String?>{
@@ -118,8 +159,11 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
       final local = locals[entry.key];
       if (local == null || local.isEmpty) continue;
       try {
-        final url = await StorageService.instance
-            .uploadFile(entry.value.path, local);
+        final url = await CloudinaryService.instance.uploadFile(
+          local,
+          folder: entry.value.folder,
+          publicId: entry.value.publicId,
+        );
         data[entry.value.field] = url;
       } catch (_) {
         // Best-effort — skip a failed upload, keep registering.
@@ -129,17 +173,15 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
 
   @override
   Future<RiderEntity?> getCachedRider() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return null;
-
+    final id = RiderSession.riderId;
+    if (id == null) return null;
     try {
-      final riderData = await _fs.getRider(currentUser.uid);
+      final riderData = await _fs.getRider(id);
       if (riderData == null) return null;
       final rider = RiderModel.fromJson(riderData);
       await _storage.saveRiderJson(rider.toJsonString());
       return rider;
     } catch (_) {
-      // Fall back to locally cached data if Firestore is unavailable
       final json = await _storage.getRiderJson();
       if (json == null) return null;
       return RiderModel.fromJsonString(json);
@@ -149,15 +191,19 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
   @override
   Future<void> logout() async {
     _pendingRegistration = null;
-    await _auth.signOut();
+    _pendingOtp = null;
+    RiderSession.riderId = null;
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (_) {}
     await _storage.clearAll();
   }
 
   @override
   Future<AccountStatus> fetchAccountStatus() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) throw Exception('Not signed in');
-    final data = await _fs.getRider(currentUser.uid);
+    final id = RiderSession.riderId;
+    if (id == null) throw Exception('Not signed in');
+    final data = await _fs.getRider(id);
     if (data == null) throw Exception('Rider document not found');
     return AccountStatus.fromString(data['account_status']?.toString());
   }

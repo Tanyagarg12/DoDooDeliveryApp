@@ -10,6 +10,7 @@ import '../../../../core/services/sound_service.dart';
 import '../../../../core/widgets/city_selector.dart';
 import '../../../../core/widgets/fade_in.dart';
 import '../../../orders_api/data/dodoo_order_api.dart';
+import '../../../orders_api/data/models/dodoo_order.dart';
 import 'admin_order_detail_screen.dart';
 
 /// Orders management tab inside the admin portal. Auto-syncs new orders from the
@@ -97,8 +98,19 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
       final riderIds = await _admin.approvedRiderIds();
 
       var imported = 0;
+      final openIds = <String>{};
+      final syncedCities = <String>{};
       for (final city in cities) {
-        imported += await _importCity(city, pricePerKm, riderIds);
+        final orders = await _dodoo.getAllOrders(cityCode: city.code);
+        syncedCities.add(city.code);
+        openIds.addAll(orders.map((o) => o.orderId));
+        imported += await _importOrders(orders, city, pricePerKm, riderIds);
+      }
+
+      // Pull-sync: any of our still-pending orders that DoDoo no longer lists
+      // as open were cancelled/closed on DoDoo → reflect that here.
+      if (syncedCities.isNotEmpty) {
+        await _admin.cancelMissingPending(openIds, syncedCities);
       }
 
       // Audible + banner alert when genuinely new orders arrive — but not on
@@ -122,15 +134,14 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
     }
   }
 
-  /// Fetches one city's open orders and imports any not already in Supabase,
-  /// broadcasting each new order to all approved riders. Returns the number of
-  /// new orders imported.
-  Future<int> _importCity(
+  /// Imports any orders not already in Firestore, broadcasting each new order
+  /// to all approved riders. Returns the number of new orders imported.
+  Future<int> _importOrders(
+    List<DodooOrder> orders,
     DodooCity city,
     double? pricePerKm,
     List<String> riderIds,
   ) async {
-    final orders = await _dodoo.getAllOrders(cityCode: city.code);
     if (orders.isEmpty) return 0;
 
     final ids = orders.map((o) => o.orderId).toList();
@@ -140,8 +151,17 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
     if (newOnes.isEmpty) return 0;
 
     for (final o in newOnes) {
+      // The list rows are sparse (just id/status/date). Fetch the full detail
+      // (addresses, customer, items, pricing) so the order isn't imported blank.
+      var full = o;
+      try {
+        final detail =
+            await _dodoo.getOrderDetail(o.orderId, orderType: o.orderType);
+        if (detail != null && !detail.isNoData) full = detail;
+      } catch (_) {/* keep the sparse list row if detail fails */}
+
       await _admin.insertOrderWithOffers(
-        o.toSupabaseOrder(pricePerKm: pricePerKm, cityCodeOverride: city.code),
+        full.toSupabaseOrder(pricePerKm: pricePerKm, cityCodeOverride: city.code),
         riderIds,
       );
     }

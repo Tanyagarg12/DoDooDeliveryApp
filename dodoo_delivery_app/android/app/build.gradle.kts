@@ -38,6 +38,28 @@ android {
         versionName = flutter.versionName
     }
 
+    // Allow per-flavor resValue() (the app_name string below).
+    buildFeatures {
+        resValues = true
+    }
+
+    // Two separate apps from one codebase: the rider app and the admin app.
+    // Build with:  flutter run/build apk --flavor rider -t lib/main.dart
+    //              flutter build apk --flavor admin -t lib/main_admin.dart
+    flavorDimensions += "app"
+    productFlavors {
+        create("rider") {
+            dimension = "app"
+            applicationId = "com.dodoo.delivery.rider"
+            resValue("string", "app_name", "DoDoo Rider")
+        }
+        create("admin") {
+            dimension = "app"
+            applicationId = "com.dodoo.delivery.admin"
+            resValue("string", "app_name", "DoDoo Admin")
+        }
+    }
+
     signingConfigs {
         create("release") {
             if (keystorePropertiesFile.exists()) {

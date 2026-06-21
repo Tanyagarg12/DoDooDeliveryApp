@@ -1,7 +1,9 @@
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../../core/cloudinary/cloudinary_service.dart';
+import '../../data/datasources/admin_firestore_datasource.dart';
 
 /// Lightweight persistent store for the admin's display name + photo.
 /// Backed by shared_preferences; the avatar listens to [notifier].
@@ -114,13 +116,13 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     if (picked == null) return;
     setState(() => _saving = true);
     try {
-      final bytes = await picked.readAsBytes();
-      final ref = FirebaseStorage.instance.ref('admin/profile.jpg');
-      await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
-      // Cache-bust so the new image shows immediately (download URL already
-      // carries query params, so append with '&').
-      final url =
-          '${await ref.getDownloadURL()}&v=${DateTime.now().millisecondsSinceEpoch}';
+      final uploaded = await CloudinaryService.instance.uploadFile(
+        picked.path,
+        folder: 'admin',
+        publicId: 'profile',
+      );
+      // Cache-bust so the new image shows immediately.
+      final url = '$uploaded?v=${DateTime.now().millisecondsSinceEpoch}';
       await AdminProfile.instance
           .save(name: _nameCtrl.text.trim().isEmpty ? 'Admin' : _nameCtrl.text.trim(), photoUrl: url);
       if (mounted) {
@@ -150,6 +152,80 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Profile saved.'), backgroundColor: _lime),
     );
+  }
+
+  void _snack(String msg, {bool ok = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: ok ? _lime : Colors.red.shade700,
+      ),
+    );
+  }
+
+  Future<void> _changePassword() async {
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Change password'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: currentCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: 'Current password',
+                    prefixIcon: Icon(Icons.lock_outline)),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: newCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: 'New password',
+                    prefixIcon: Icon(Icons.lock_reset_rounded)),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: confirmCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: 'Confirm new password',
+                    prefixIcon: Icon(Icons.lock_reset_rounded)),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            style: FilledButton.styleFrom(backgroundColor: _lime),
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    if (newCtrl.text.trim() != confirmCtrl.text.trim()) {
+      _snack('New passwords do not match.');
+      return;
+    }
+    try {
+      await AdminFirestoreDataSource()
+          .changePassword(currentCtrl.text, newCtrl.text);
+      _snack('Password updated.', ok: true);
+    } catch (e) {
+      _snack(e.toString().replaceFirst('Exception: ', ''));
+    }
   }
 
   @override
@@ -227,6 +303,38 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                   style: FilledButton.styleFrom(
                       backgroundColor: _lime,
                       minimumSize: const Size.fromHeight(48)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // ── Security ──────────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFD7E3E1)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Security',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w800, fontSize: 14, color: _ink)),
+                const SizedBox(height: 6),
+                Text('Change the admin login password.',
+                    style: TextStyle(fontSize: 12.5, color: Colors.grey.shade600)),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _changePassword,
+                  icon: const Icon(Icons.lock_reset_rounded, size: 18),
+                  label: const Text('Change password'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _ink,
+                    side: const BorderSide(color: _lime),
+                    minimumSize: const Size.fromHeight(48),
+                  ),
                 ),
               ],
             ),

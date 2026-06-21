@@ -70,9 +70,9 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
   }
 
   void _verify() {
-    if (_otp.length != 6) {
+    if (_otp.length != 4) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter the 6-digit OTP')),
+        const SnackBar(content: Text('Please enter the 4-digit OTP')),
       );
       return;
     }
@@ -181,7 +181,7 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
               Text.rich(
                 textAlign: TextAlign.center,
                 TextSpan(
-                  text: 'We sent a 6-digit code to\n',
+                  text: 'We sent a 4-digit code to\n',
                   style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
                   children: [
                     TextSpan(
@@ -223,7 +223,7 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
                       ],
                       OtpInputWidget(
                         key: _otpKey,
-                        length: 6,
+                        length: 4,
                         onCompleted: (otp) => setState(() => _otp = otp),
                         onChanged: (otp) => setState(() => _otp = otp),
                       ),
