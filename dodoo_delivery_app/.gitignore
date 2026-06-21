@@ -81,3 +81,10 @@ node_modules/
 dodoo-admin/node_modules/
 dodoo-admin/dist/
 dodoo-admin/build/
+
+# Build artifacts & signing secrets (never commit)
+*.apk
+*.aab
+*.jks
+*.keystore
+key.properties
