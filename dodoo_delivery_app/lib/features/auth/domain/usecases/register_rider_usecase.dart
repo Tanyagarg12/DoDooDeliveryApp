@@ -5,5 +5,6 @@ class RegisterRiderUseCase {
   final AuthRepository _repository;
   const RegisterRiderUseCase(this._repository);
 
-  Future<void> call(RegistrationData data) => _repository.register(data);
+  Future<RiderEntity> call(RegistrationData data) =>
+      _repository.completeRegistration(data);
 }

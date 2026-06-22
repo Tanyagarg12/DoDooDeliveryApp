@@ -34,8 +34,9 @@ class RiderFirestoreApi {
     final res = await _fs.acceptOrder(orderId);
     _dodoo
         .pushStatus(
-          orderId: res['order_number']?.toString() ?? '',
+          orderNumber: res['order_number']?.toString() ?? '',
           internalStatus: 'accepted',
+          orderType: res['order_type']?.toString(),
           riderId: _fs.currentUid,
         )
         .ignore();
@@ -49,8 +50,9 @@ class RiderFirestoreApi {
     final res = await _fs.updateOrderStatus(orderId, status);
     _dodoo
         .pushStatus(
-          orderId: res['order_number']?.toString() ?? '',
+          orderNumber: res['order_number']?.toString() ?? '',
           internalStatus: status,
+          orderType: res['order_type']?.toString(),
           riderId: _fs.currentUid,
         )
         .ignore();

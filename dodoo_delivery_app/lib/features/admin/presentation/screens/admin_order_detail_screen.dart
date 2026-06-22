@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/order_status.dart';
 import '../../../../core/firebase/admin_firestore_service.dart';
@@ -71,8 +72,9 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
       if (newStatus != null) {
         _dodoo
             .pushStatus(
-              orderId: _order?['order_number']?.toString() ?? '',
+              orderNumber: _order?['order_number']?.toString() ?? '',
               internalStatus: newStatus,
+              orderType: _order?['order_type']?.toString(),
               riderId: patch['assigned_rider_id']?.toString(),
             )
             .ignore();
@@ -240,25 +242,48 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
           const SizedBox(height: 10),
           _line(Icons.location_on_rounded, const Color(0xFFDC2626), 'Drop',
               o['to_address']?.toString() ?? '—'),
-          const Divider(height: 22),
-          Row(
-            children: [
-              Expanded(
-                  child: _kv('Distance', '${o['distance_in_km'] ?? 0} km')),
-              Expanded(
-                  child: _kv('ETA', '${o['estimated_time_minutes'] ?? '—'} min')),
-              Expanded(
-                  child: _kv('Earning',
-                      '₹${o['total_earning'] ?? o['minimum_fare'] ?? 0}')),
-            ],
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _openMap,
+              icon: const Icon(Icons.map_outlined, size: 16),
+              label: const Text('Map View'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _teal,
+                side: const BorderSide(color: _teal),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                minimumSize: const Size(0, 34),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
           ),
+          const Divider(height: 22),
+          Builder(builder: (_) {
+            final km = (o['distance_in_km'] as num?)?.toDouble() ?? 0;
+            final eta = o['estimated_time_minutes'];
+            return Row(
+              children: [
+                Expanded(
+                    child: _kv(
+                        'Distance',
+                        km > 0
+                            ? '${km % 1 == 0 ? km.toStringAsFixed(0) : km.toStringAsFixed(1)} km'
+                            : '—')),
+                Expanded(child: _kv('ETA', eta != null ? '$eta min' : '—')),
+                Expanded(
+                    child: _kv('Earning',
+                        '₹${money(o['total_earning'] ?? o['minimum_fare'] ?? 0)}')),
+              ],
+            );
+          }),
         ]),
         const SizedBox(height: 12),
 
         _card('Customer', [
           _kv('Name', o['customer_name']?.toString() ?? '—'),
           const SizedBox(height: 8),
-          _kv('Phone (admin only)', phone.isEmpty ? '—' : phone),
+          _phoneRow(phone),
           if ((o['store_name']?.toString() ?? '').isNotEmpty) ...[
             const SizedBox(height: 8),
             _kv('Store', o['store_name'].toString()),
@@ -283,7 +308,20 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
           _kv('Updated',
               _fmt(o['status_updated_at']) ?? _fmt(o['created_at']) ?? '—'),
         ]),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
+
+        // #6 — admin can set the order status directly (also pushed to DoDoo).
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _changeStatus,
+          icon: const Icon(Icons.flag_rounded, size: 18),
+          label: const Text('Change order status'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _teal,
+            side: const BorderSide(color: _teal),
+            minimumSize: const Size.fromHeight(48),
+          ),
+        ),
+        const SizedBox(height: 12),
 
         // Actions — only for orders that are still in progress.
         if (!canCancel)
@@ -417,6 +455,149 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
     );
   }
 
+  /// Tappable customer phone (calls via the dialer).
+  Widget _phoneRow(String phone) {
+    if (phone.isEmpty) return _kv('Phone (admin only)', '—');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Phone (admin only)',
+            style: TextStyle(fontSize: 10, color: Colors.black54)),
+        const SizedBox(height: 2),
+        InkWell(
+          onTap: () => _dialPhone(phone),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.call_rounded, size: 15, color: Color(0xFF2563EB)),
+              const SizedBox(width: 5),
+              Text(phone,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF2563EB),
+                      decoration: TextDecoration.underline,
+                      decorationColor: Color(0xFF2563EB))),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _dialPhone(String phone) async {
+    final cleaned = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+    if (cleaned.isEmpty) return;
+    final uri = Uri.parse('tel:$cleaned');
+    if (await canLaunchUrl(uri)) await launchUrl(uri);
+  }
+
+  /// Opens the drop location in Google Maps (by coordinates, else by address).
+  Future<void> _openMap() async {
+    final o = _order;
+    if (o == null) return;
+    final lat = o['to_latitude'];
+    final lng = o['to_longitude'];
+    final query = (lat != null && lng != null)
+        ? '$lat,$lng'
+        : Uri.encodeComponent(o['to_address']?.toString() ?? '');
+    if (query.isEmpty) return;
+    final uri =
+        Uri.parse('https://www.google.com/maps/search/?api=1&query=$query');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  /// #6 — admin manually sets the order status (also pushes to DoDoo via _update).
+  Future<void> _changeStatus() async {
+    final current = AdminOrderStatus.fromInternal(_order?['status']?.toString());
+    final picked = await showModalBottomSheet<AdminOrderStatus>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Set order status',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+              const SizedBox(height: 2),
+              Text('Currently: ${current.label}',
+                  style: TextStyle(fontSize: 12.5, color: Colors.grey.shade600)),
+              const SizedBox(height: 14),
+              ...AdminOrderStatus.all.map((s) {
+                final selected = s.key == current.key;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: selected
+                        ? s.color.withValues(alpha: 0.10)
+                        : const Color(0xFFF6F7E8),
+                    borderRadius: BorderRadius.circular(12),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => Navigator.pop(context, s),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 13),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 11,
+                              height: 11,
+                              decoration: BoxDecoration(
+                                  color: s.color, shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(s.label,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14.5,
+                                      color: Color(0xFF1C1D00))),
+                            ),
+                            if (selected)
+                              Icon(Icons.check_circle_rounded,
+                                  size: 18, color: s.color),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (picked != null && picked.key != current.key) {
+      await _update(
+        {'status': picked.internal.first},
+        'Status set to ${picked.label}.',
+      );
+    }
+  }
+
   String? _fmt(dynamic ts) {
     if (ts == null) return null;
     final dt = DateTime.tryParse(ts.toString());
@@ -442,6 +623,7 @@ class _ItemsCard extends StatelessWidget {
     final hasPricing = order['items_subtotal'] != null ||
         order['delivery_charge'] != null ||
         order['tax'] != null ||
+        order['wallet_amount'] != null ||
         order['order_total'] != null;
 
     return Container(
@@ -488,10 +670,11 @@ class _ItemsCard extends StatelessWidget {
             }),
           if (hasPricing) ...[
             const Divider(height: 20),
-            _priceRow('Items subtotal', order['items_subtotal']),
-            _priceRow('Delivery charge', order['delivery_charge']),
-            _priceRow('Tax', order['tax']),
-            _priceRow('Total', order['order_total'], bold: true),
+            _priceRow('Item Price', order['items_subtotal']),
+            _priceRow('Service Charges', order['delivery_charge']),
+            _priceRow('Convenience Fee', order['tax']),
+            _priceRow('Wallet Amount', order['wallet_amount']),
+            _priceRow('Order Total', order['order_total'], bold: true),
           ],
         ],
       ),
@@ -511,7 +694,7 @@ class _ItemsCard extends StatelessWidget {
                     color: bold ? const Color(0xFF1C1D00) : Colors.black54,
                     fontWeight: bold ? FontWeight.w800 : FontWeight.w500)),
           ),
-          Text('₹$value',
+          Text('₹${money(value)}',
               style: TextStyle(
                   fontSize: bold ? 15 : 13,
                   fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
@@ -520,6 +703,14 @@ class _ItemsCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Formats a money value without an ugly trailing ".0" (₹534.0 → ₹534).
+String money(dynamic v) {
+  if (v == null) return '0';
+  final n = v is num ? v.toDouble() : double.tryParse(v.toString());
+  if (n == null) return v.toString();
+  return n % 1 == 0 ? n.toStringAsFixed(0) : n.toStringAsFixed(2);
 }
 
 // ── Status badge ─────────────────────────────────────────────────────────────

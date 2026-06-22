@@ -61,14 +61,32 @@ class AuthController extends StateNotifier<AuthState> {
 
   void reset() => state = const AuthInitial();
 
-  /// Step 1 — Check if the phone is registered and decide the next step.
+  /// Step 1 — Always send an OTP (existing or new number). The OTP is verified
+  /// FIRST; registration (for new numbers) happens after verification.
   Future<void> checkPhone(String phone) async {
     state = const AuthLoading();
     try {
       final result = await _checkPhone(phone);
-      if (result.exists) {
-        final devOtp = await _sendOtp(phone);
-        state = AuthOtpSent(phone: phone, isNewRegistration: false, devOtp: devOtp);
+      final devOtp = await _sendOtp(phone);
+      state = AuthOtpSent(
+          phone: phone, isNewRegistration: !result.exists, devOtp: devOtp);
+    } on NetworkException catch (e) {
+      state = AuthError(e.message);
+    } on ServerException catch (e) {
+      state = AuthError(e.message);
+    } catch (e) {
+      state = AuthError(e.toString());
+    }
+  }
+
+  /// Step 2 — Verify OTP. Existing rider → authenticated; new number → goes to
+  /// the registration form (OTP already proven).
+  Future<void> verifyOtp({required String phone, required String otp}) async {
+    state = const AuthLoading();
+    try {
+      final rider = await _verifyOtp(phone: phone, otp: otp);
+      if (rider != null) {
+        state = AuthAuthenticated(rider);
       } else {
         state = AuthNeedsRegistration(phone);
       }
@@ -76,39 +94,23 @@ class AuthController extends StateNotifier<AuthState> {
       state = AuthError(e.message);
     } on ServerException catch (e) {
       state = AuthError(e.message);
+    } on UnauthorizedException {
+      state = const AuthError('Invalid OTP. Please try again.');
     } catch (e) {
       state = AuthError(e.toString());
     }
   }
 
-  /// Step 2a — New user submits registration form with documents.
+  /// Step 3 — New rider submits the registration form (after OTP verification).
   Future<void> registerRider(RegistrationData data) async {
     state = const AuthLoading();
     try {
-      await _register(data);
-      final devOtp = await _sendOtp(data.phone);
-      state = AuthOtpSent(phone: data.phone, isNewRegistration: true, devOtp: devOtp);
-    } on NetworkException catch (e) {
-      state = AuthError(e.message);
-    } on ServerException catch (e) {
-      state = AuthError(e.message);
-    } catch (e) {
-      state = AuthError(e.toString());
-    }
-  }
-
-  /// Step 2b — Verify OTP (both login and post-registration).
-  Future<void> verifyOtp({required String phone, required String otp}) async {
-    state = const AuthLoading();
-    try {
-      final rider = await _verifyOtp(phone: phone, otp: otp);
+      final rider = await _register(data);
       state = AuthAuthenticated(rider);
     } on NetworkException catch (e) {
       state = AuthError(e.message);
     } on ServerException catch (e) {
       state = AuthError(e.message);
-    } on UnauthorizedException {
-      state = const AuthError('Invalid OTP. Please try again.');
     } catch (e) {
       state = AuthError(e.toString());
     }

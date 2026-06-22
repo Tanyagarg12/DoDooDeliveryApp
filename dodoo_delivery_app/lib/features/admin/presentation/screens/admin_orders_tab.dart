@@ -94,13 +94,13 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
           ? DodooCities.all
           : [DodooCities.byCode(_cityCode)];
 
-      final pricePerKm = await _admin.pricePerKm();
       final riderIds = await _admin.approvedRiderIds();
 
       var imported = 0;
       final openIds = <String>{};
       final syncedCities = <String>{};
       for (final city in cities) {
+        final pricePerKm = await _admin.pricePerKm(cityCode: city.code);
         final orders = await _dodoo.getAllOrders(cityCode: city.code);
         syncedCities.add(city.code);
         openIds.addAll(orders.map((o) => o.orderId));
@@ -160,10 +160,12 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
         if (detail != null && !detail.isNoData) full = detail;
       } catch (_) {/* keep the sparse list row if detail fails */}
 
-      await _admin.insertOrderWithOffers(
-        full.toSupabaseOrder(pricePerKm: pricePerKm, cityCodeOverride: city.code),
-        riderIds,
-      );
+      final data = full.toSupabaseOrder(
+          pricePerKm: pricePerKm, cityCodeOverride: city.code);
+      // Only broadcast offers for orders that are actually open/pending;
+      // orders DoDoo already has in-progress are imported but not re-offered.
+      final broadcastTo = data['status'] == 'pending' ? riderIds : const <String>[];
+      await _admin.insertOrderWithOffers(data, broadcastTo);
     }
     return newOnes.length;
   }
@@ -267,10 +269,37 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
         Container(
           color: Colors.white,
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-          child: CitySelector(
-            value: _cityCode,
-            includeAll: true,
-            onChanged: _onCityChanged,
+          child: Row(
+            children: [
+              Expanded(
+                child: CitySelector(
+                  value: _cityCode,
+                  includeAll: true,
+                  onChanged: _onCityChanged,
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Manual refresh (re-syncs from DoDoo + reloads).
+              Material(
+                color: const Color(0xFFF2F5A0),
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: _loading || _syncing ? null : () => load(),
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: _syncing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Color(0xFF6B6E00)))
+                        : const Icon(Icons.refresh_rounded,
+                            size: 18, color: Color(0xFF6B6E00)),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         // Search bar
@@ -514,88 +543,104 @@ class _OrderCard extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text('#${order['order_number'] ?? '—'}',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800, fontSize: 14)),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('#${order['order_number'] ?? '—'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 13)),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      statusInfo.label.toUpperCase(),
+                      style: TextStyle(
+                          color: color,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
               ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  statusInfo.label.toUpperCase(),
-                  style: TextStyle(
-                      color: color, fontSize: 10, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Icon(Icons.person_outline_rounded,
-                  size: 13, color: Colors.grey.shade600),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  (order['customer_name']?.toString().isNotEmpty ?? false)
-                      ? order['customer_name'].toString()
-                      : 'Customer',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              Text(_fmtDate(order['created_at']),
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _routeLine(
-              Icons.store_rounded, const Color(0xFFBABC2F),
-              order['from_address']?.toString() ?? '—'),
-          const SizedBox(height: 6),
-          _routeLine(Icons.location_on_rounded, const Color(0xFFDC2626),
-              order['to_address']?.toString() ?? '—'),
-          const Divider(height: 18),
-          Row(
-            children: [
-              _meta(Icons.straighten_rounded, '${order['distance_in_km'] ?? 0} km'),
-              const SizedBox(width: 14),
-              _meta(Icons.currency_rupee_rounded,
-                  '${order['total_earning'] ?? order['minimum_fare'] ?? 0}'),
-              const Spacer(),
-              Icon(
-                assignedId == null
-                    ? Icons.person_off_outlined
-                    : Icons.person_rounded,
-                size: 14,
-                color: Colors.grey.shade600,
-              ),
-              const SizedBox(width: 4),
+              const SizedBox(height: 3),
               Text(
-                assignedId == null ? 'Unassigned' : (riderName ?? 'Rider'),
+                '${(order['customer_name']?.toString().isNotEmpty ?? false) ? order['customer_name'] : 'Customer'}  ·  ${_fmtDate(order['created_at'])}',
+                style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+              _line('Pickup', order['from_address']?.toString() ?? '—',
+                  const Color(0xFFBABC2F)),
+              const SizedBox(height: 2),
+              _line('Drop', order['to_address']?.toString() ?? '—',
+                  const Color(0xFFDC2626)),
+              const SizedBox(height: 8),
+              Text(
+                _footer(order, assignedId, riderName),
                 style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w600,
                     color: Colors.grey.shade700),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-            ],
-          ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// Compact "Pickup/Drop · address" line with a small colour dot (no big icon).
+  Widget _line(String label, String text, Color dot) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 4, right: 6),
+          child: Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+          ),
+        ),
+        Expanded(
+          child: Text('$label: $text',
+              style: const TextStyle(fontSize: 12),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
+        ),
+      ],
+    );
+  }
+
+  /// Text-only footer: distance (only if known) · fare · assignee.
+  String _footer(Map<String, dynamic> order, String? assignedId, String? riderName) {
+    final km = (order['distance_in_km'] as num?)?.toDouble() ?? 0;
+    final earnRaw = order['total_earning'] ?? order['minimum_fare'] ?? 0;
+    final earnNum = earnRaw is num
+        ? earnRaw.toDouble()
+        : double.tryParse(earnRaw.toString()) ?? 0;
+    final earn =
+        earnNum % 1 == 0 ? earnNum.toStringAsFixed(0) : earnNum.toStringAsFixed(2);
+    final parts = <String>[
+      if (km > 0) '${km % 1 == 0 ? km.toStringAsFixed(0) : km.toStringAsFixed(1)} km',
+      '₹$earn',
+      assignedId == null ? 'Unassigned' : (riderName ?? 'Rider'),
+    ];
+    return parts.join('   ·   ');
   }
 
   String _fmtDate(dynamic raw) {
@@ -604,34 +649,6 @@ class _OrderCard extends StatelessWidget {
     final l = dt.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(l.day)}/${two(l.month)}/${l.year}';
-  }
-
-  Widget _routeLine(IconData icon, Color color, String text) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 15, color: color),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(text,
-              style: const TextStyle(fontSize: 12.5),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis),
-        ),
-      ],
-    );
-  }
-
-  Widget _meta(IconData icon, String text) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 14, color: Colors.grey.shade600),
-        const SizedBox(width: 3),
-        Text(text,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
-      ],
-    );
   }
 
 }

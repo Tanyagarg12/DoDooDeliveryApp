@@ -1,6 +1,8 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/fade_in.dart';
@@ -22,10 +24,24 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
   final _phoneController = TextEditingController();
   bool _agreedToTerms = false;
 
+  late final TapGestureRecognizer _termsTap =
+      TapGestureRecognizer()..onTap = _openTerms;
+  late final TapGestureRecognizer _privacyTap =
+      TapGestureRecognizer()..onTap = _openTerms;
+
   @override
   void dispose() {
     _phoneController.dispose();
+    _termsTap.dispose();
+    _privacyTap.dispose();
     super.dispose();
+  }
+
+  Future<void> _openTerms() async {
+    final uri = Uri.parse('https://www.dodoo.in:5678/DoDooterms.html');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   void _submit() {
@@ -237,19 +253,23 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
                                   style: TextStyle(
                                       fontSize: 13,
                                       color: Colors.grey.shade700),
-                                  children: const [
+                                  children: [
                                     TextSpan(
                                       text: 'Terms',
-                                      style: TextStyle(
+                                      style: const TextStyle(
                                           color: AppColors.accent,
-                                          fontWeight: FontWeight.w700),
+                                          fontWeight: FontWeight.w700,
+                                          decoration: TextDecoration.underline),
+                                      recognizer: _termsTap,
                                     ),
-                                    TextSpan(text: ' & '),
+                                    const TextSpan(text: ' & '),
                                     TextSpan(
                                       text: 'Privacy Policy',
-                                      style: TextStyle(
+                                      style: const TextStyle(
                                           color: AppColors.accent,
-                                          fontWeight: FontWeight.w700),
+                                          fontWeight: FontWeight.w700,
+                                          decoration: TextDecoration.underline),
+                                      recognizer: _privacyTap,
                                     ),
                                   ],
                                 ),

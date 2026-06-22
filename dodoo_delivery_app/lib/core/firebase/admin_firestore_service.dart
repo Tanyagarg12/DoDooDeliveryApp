@@ -181,10 +181,15 @@ class AdminFirestoreService {
     await Db.appSettings.doc(key).set({'value': value}, SetOptions(merge: true));
   }
 
-  /// Admin-configured delivery rate per km (fallback fare). Defaults to 8.
-  Future<double> pricePerKm() async {
-    final v = await getSetting('price_per_km');
-    return double.tryParse(v ?? '') ?? 8.0;
+  /// Admin-configured delivery rate per km — per city, falling back to the
+  /// global rate, then 8. Stored at app_settings/price_per_km_<CITY>.
+  Future<double> pricePerKm({String? cityCode}) async {
+    if (cityCode != null && cityCode.isNotEmpty) {
+      final v = await getSetting('price_per_km_$cityCode');
+      if (v != null && v.isNotEmpty) return double.tryParse(v) ?? 8.0;
+    }
+    final g = await getSetting('price_per_km');
+    return double.tryParse(g ?? '') ?? 8.0;
   }
 
   /// Minutes a rider can stay offline before the reminder fires. Defaults to 15.

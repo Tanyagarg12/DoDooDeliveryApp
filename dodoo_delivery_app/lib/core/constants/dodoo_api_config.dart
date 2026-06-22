@@ -20,14 +20,10 @@ class DodooApiConfig {
     'OnGoing',
   ];
 
-  /// Endpoint path (relative to [baseUrl]) DoDoo uses to UPDATE an order's
-  /// status — i.e. push the rider's progress back to the DoDoo platform.
-  ///
-  /// LEFT EMPTY until DoDoo provides the operation (the service hides its
-  /// metadata, so it can't be auto-discovered). When you have it, set it here,
-  /// e.g. '/UpdateOrderStatus', and status push-back activates automatically.
-  static const String statusUpdatePath = '';
-
-  /// HTTP method for [statusUpdatePath] ('POST' or 'GET').
-  static const String statusUpdateMethod = 'POST';
+  /// DoDoo status-update endpoint. Called as:
+  ///   GET {baseUrl}/UpdateOrderStatus/{Type}/{Status}/{ShortOrderID}
+  /// e.g. /UpdateOrderStatus/Store/InProgress/STOR20260616193554136
+  /// (Type = Store | PickDrop; ShortOrderID = the OrderID without the city
+  /// prefix, e.g. ATP_STOR… → STOR…).
+  static const String statusUpdatePath = '/UpdateOrderStatus';
 }

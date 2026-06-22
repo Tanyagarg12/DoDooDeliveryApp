@@ -26,8 +26,7 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
   final _fs = FirestoreService.instance;
   final _dodoo = DodooOrderApi();
 
-  // Held in memory between calls.
-  RegistrationData? _pendingRegistration;
+  // Held in memory between sendOtp and verifyOtp.
   String? _pendingOtp;
 
   static String _digits(String phone) => phone.replaceAll(RegExp(r'[^0-9]'), '');
@@ -71,7 +70,7 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
   }
 
   @override
-  Future<RiderEntity> verifyOtp({
+  Future<RiderEntity?> verifyOtp({
     required String phone,
     required String otp,
   }) async {
@@ -81,42 +80,39 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
     final id = _digits(phone);
     await _ensureAnonSession();
     RiderSession.riderId = id;
-
-    final existing = await _fs.getRider(id);
-    Map<String, dynamic> riderData;
-
-    if (existing != null) {
-      riderData = existing;
-    } else {
-      // New rider — create the Firestore doc (id == phone) from registration.
-      final reg = _pendingRegistration;
-      final data = <String, dynamic>{
-        'phone': id,
-        'first_name': reg?.firstName ?? '',
-        'last_name': reg?.lastName ?? '',
-        'email': reg?.email ?? '',
-        'address': reg?.address ?? '',
-        'aadhar_number': reg?.aadhaarNumber ?? '',
-        'driving_license_number': reg?.drivingLicenseNumber ?? '',
-      };
-      if (reg != null) {
-        await _uploadRegistrationDocs(id, reg, data);
-      }
-      await _fs.createRider(id, data);
-      _pendingRegistration = null;
-      riderData = {...data, 'id': id, 'account_status': 'pending'};
-    }
-
-    final rider = RiderModel.fromJson(riderData);
-    await _storage.saveRiderJson(rider.toJsonString());
     _pendingOtp = null;
+
+    // Existing rider → return them. New number → null (caller routes to register).
+    final existing = await _fs.getRider(id);
+    if (existing == null) return null;
+    final rider = RiderModel.fromJson(existing);
+    await _storage.saveRiderJson(rider.toJsonString());
     return rider;
   }
 
   @override
-  Future<void> register(RegistrationData data) async {
-    // Store locally — the Firestore write happens after OTP verification.
-    _pendingRegistration = data;
+  Future<RiderEntity> completeRegistration(RegistrationData data) async {
+    // OTP already verified; the anonymous session + RiderSession are set.
+    final id = _digits(data.phone);
+    await _ensureAnonSession();
+    RiderSession.riderId = id;
+
+    final fields = <String, dynamic>{
+      'phone': id,
+      'first_name': data.firstName,
+      'last_name': data.lastName,
+      'email': data.email ?? '',
+      'address': data.address ?? '',
+      'aadhar_number': data.aadhaarNumber ?? '',
+      'driving_license_number': data.drivingLicenseNumber ?? '',
+    };
+    await _uploadRegistrationDocs(id, data, fields);
+    await _fs.createRider(id, fields);
+
+    final rider =
+        RiderModel.fromJson({...fields, 'id': id, 'account_status': 'pending'});
+    await _storage.saveRiderJson(rider.toJsonString());
+    return rider;
   }
 
   /// Uploads the registration photo + KYC images to Cloudinary and adds their
@@ -190,7 +186,6 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
 
   @override
   Future<void> logout() async {
-    _pendingRegistration = null;
     _pendingOtp = null;
     RiderSession.riderId = null;
     try {

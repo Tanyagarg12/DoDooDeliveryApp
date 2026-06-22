@@ -77,13 +77,13 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                       // DoDoo brand logo in the middle.
                       Image.asset(
                         'assets/images/dodoo_logo.png',
-                        height: 110,
+                        height: 132,
                         fit: BoxFit.contain,
-                        errorBuilder: (_, _, _) => const SizedBox(height: 110),
+                        errorBuilder: (_, _, _) => const SizedBox(height: 132),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Admin Portal',
+                        'DoDoo Admin',
                         style: TextStyle(
                           fontSize: 13,
                           letterSpacing: 2,
@@ -168,11 +168,6 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                             ),
                           ],
                         ),
-                      ),
-                      const SizedBox(height: 20),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Back to Rider App'),
                       ),
                     ],
                   ),

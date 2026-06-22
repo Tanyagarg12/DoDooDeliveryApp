@@ -69,6 +69,7 @@ class DodooOrderApi {
       case 'accepted':
         return 'Accept';
       case 'picked_up':
+        return 'InProgress';
       case 'in_transit':
       case 'reached':
         return 'OnGoing';
@@ -81,29 +82,34 @@ class DodooOrderApi {
     }
   }
 
-  /// Pushes an order's status back to DoDoo. Best-effort and **no-op until
-  /// [DodooApiConfig.statusUpdatePath] is configured** — never throws to the
-  /// caller, so a DoDoo hiccup can't block the rider/admin flow.
+  /// "Store" or "PickDrop" for the update path, from the order id / type.
+  static String _typeSegment(String orderNumber, String? orderType) {
+    final isStore = (orderType?.toLowerCase() == 'store') ||
+        orderNumber.toUpperCase().contains('STOR');
+    return isStore ? 'Store' : 'PickDrop';
+  }
+
+  /// The OrderID without its city prefix (ATP_STOR… → STOR…).
+  static String _shortId(String orderNumber) =>
+      orderNumber.contains('_') ? orderNumber.split('_').last : orderNumber;
+
+  /// Pushes an order's status to DoDoo:
+  ///   GET /UpdateOrderStatus/{Type}/{Status}/{ShortOrderID}
+  /// Best-effort — never throws, so a DoDoo hiccup can't block the app flow.
   Future<void> pushStatus({
-    required String orderId,
+    required String orderNumber,
     required String internalStatus,
+    String? orderType,
     String? riderId,
   }) async {
     final path = DodooApiConfig.statusUpdatePath;
-    if (path.isEmpty || orderId.isEmpty) return; // endpoint not configured yet
+    if (path.isEmpty || orderNumber.isEmpty) return;
     final dodooStatus = dodooStatusFor(internalStatus);
     if (dodooStatus == null) return;
-    final body = {
-      'OrderID': orderId,
-      'Status': dodooStatus,
-      if (riderId != null && riderId.isNotEmpty) 'BoyID': riderId,
-    };
+    final type = _typeSegment(orderNumber, orderType);
+    final id = _shortId(orderNumber);
     try {
-      if (DodooApiConfig.statusUpdateMethod.toUpperCase() == 'GET') {
-        await _dio.get<dynamic>('$path/$orderId/$dodooStatus');
-      } else {
-        await _dio.post<dynamic>(path, data: body);
-      }
+      await _dio.get<dynamic>('$path/$type/$dodooStatus/$id');
     } catch (_) {
       // Best-effort — DoDoo sync failures must not break the app flow.
     }

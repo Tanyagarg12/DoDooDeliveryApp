@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/constants/dodoo_cities.dart';
 import '../../../../core/firebase/admin_firestore_service.dart';
 import '../controllers/admin_controller.dart';
 import 'admin_login_screen.dart';
@@ -21,7 +22,10 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
 
   final _db = AdminFirestoreService.instance;
   final _minutesCtrl = TextEditingController();
-  final _rateCtrl = TextEditingController();
+  // One km-rate field per city.
+  final Map<String, TextEditingController> _rateCtrls = {
+    for (final c in DodooCities.all) c.code: TextEditingController(),
+  };
   bool _loading = true;
   bool _saving = false;
 
@@ -34,17 +38,22 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
   @override
   void dispose() {
     _minutesCtrl.dispose();
-    _rateCtrl.dispose();
+    for (final c in _rateCtrls.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
   Future<void> _load() async {
     final m = await _db.offlineReminderMinutes();
-    final rate = await _db.pricePerKm();
+    for (final city in DodooCities.all) {
+      final r = await _db.pricePerKm(cityCode: city.code);
+      _rateCtrls[city.code]!.text =
+          r.toStringAsFixed(r.truncateToDouble() == r ? 0 : 2);
+    }
     if (!mounted) return;
     setState(() {
       _minutesCtrl.text = m.toString();
-      _rateCtrl.text = rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2);
       _loading = false;
     });
   }
@@ -57,17 +66,22 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
       );
       return;
     }
-    final rate = double.tryParse(_rateCtrl.text.trim());
-    if (rate == null || rate < 0 || rate > 10000) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a valid price per km.')),
-      );
-      return;
+    for (final city in DodooCities.all) {
+      final rate = double.tryParse(_rateCtrls[city.code]!.text.trim());
+      if (rate == null || rate < 0 || rate > 10000) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Enter a valid price per km for ${city.name}.')),
+        );
+        return;
+      }
     }
     setState(() => _saving = true);
     try {
       await _db.setSetting('offline_reminder_minutes', mins.toString());
-      await _db.setSetting('price_per_km', rate.toString());
+      for (final city in DodooCities.all) {
+        await _db.setSetting(
+            'price_per_km_${city.code}', _rateCtrls[city.code]!.text.trim());
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -133,26 +147,29 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
                   ),
                 ]),
                 const SizedBox(height: 16),
-                _card('Pricing', [
+                _card('Pricing — per city', [
                   const Text(
-                    'Delivery rate per kilometre. Used as the fare for imported '
-                    'orders that don\'t carry a price.',
+                    'Delivery rate per kilometre for each city. Used as the fare '
+                    'for imported orders that don\'t carry a price.',
                     style: TextStyle(fontSize: 12.5, color: Colors.black54),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _rateCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                    ],
-                    decoration: const InputDecoration(
-                      labelText: 'Price per km (₹)',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.currency_rupee_rounded),
+                  for (final city in DodooCities.all) ...[
+                    TextField(
+                      controller: _rateCtrls[city.code],
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                      ],
+                      decoration: InputDecoration(
+                        labelText: '${city.name} — price per km (₹)',
+                        border: const OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.currency_rupee_rounded),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 10),
+                  ],
                 ]),
                 const SizedBox(height: 16),
                 FilledButton.icon(

@@ -15,7 +15,7 @@ import '../controllers/auth_controller.dart';
 import '../controllers/auth_state.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/document_upload_tile.dart';
-import 'otp_verification_screen.dart';
+import 'account_status_screen.dart';
 
 class RiderRegistrationScreen extends ConsumerStatefulWidget {
   const RiderRegistrationScreen({super.key, required this.phone});
@@ -101,16 +101,14 @@ class _RiderRegistrationScreenState
   @override
   Widget build(BuildContext context) {
     ref.listen<AuthState>(authControllerProvider, (_, state) {
-      if (state is AuthOtpSent) {
-        Navigator.pushReplacement(
+      if (state is AuthAuthenticated) {
+        // OTP was already verified; registration created the account.
+        Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(
-            builder: (_) => OtpVerificationScreen(
-              phone: state.phone,
-              isNewRegistration: true,
-              devOtp: state.devOtp,
-            ),
+            builder: (_) => AccountStatusScreen(rider: state.rider),
           ),
+          (r) => false,
         );
       } else if (state is AuthError) {
         ScaffoldMessenger.of(context).showSnackBar(

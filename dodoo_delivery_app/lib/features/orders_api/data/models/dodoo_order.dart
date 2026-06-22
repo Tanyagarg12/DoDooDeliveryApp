@@ -22,6 +22,7 @@ class DodooOrder {
     this.totPrice,
     this.deliveryCharge,
     this.tax,
+    this.walletAmount,
     this.itemsCategory,
     this.desc,
     this.notes,
@@ -51,6 +52,7 @@ class DodooOrder {
   final double? totPrice;
   final double? deliveryCharge;
   final double? tax;
+  final double? walletAmount;
   final String? itemsCategory;
   final String? desc;
   final String? notes;
@@ -90,6 +92,30 @@ class DodooOrder {
     return totPrice ?? price ?? deliveryCharge;
   }
 
+  /// Maps DoDoo's status word to our internal order status, so an imported
+  /// order shows its real state (not always "pending").
+  String get internalStatus {
+    switch ((status ?? '').toLowerCase()) {
+      case 'accept':
+      case 'accepted':
+      case 'assigned':
+        return 'accepted';
+      case 'inprogress':
+      case 'pickedup':
+        return 'picked_up';
+      case 'ongoing':
+        return 'in_transit';
+      case 'delivered':
+      case 'completed':
+        return 'completed';
+      case 'cancelled':
+      case 'canceled':
+        return 'cancelled';
+      default: // Open / New / Pending / unknown
+        return 'pending';
+    }
+  }
+
   /// Where the rider picks up. Store orders have no PickpAddress — the pickup
   /// is the store (whose readable name is in StoreID in the DoDoo data).
   String get pickupDisplay {
@@ -122,6 +148,7 @@ class DodooOrder {
       totPrice: _d(j['TotPrice']),
       deliveryCharge: _d(j['DeliveryCharge']),
       tax: _d(j['Tax']),
+      walletAmount: _d(j['WalletAmount']),
       itemsCategory: j['ItemsCategory']?.toString(),
       desc: j['Desc']?.toString(),
       notes: j['Notes']?.toString(),
@@ -169,7 +196,7 @@ class DodooOrder {
     }
     return {
       'order_number': orderId,
-      'status': 'pending',
+      'status': internalStatus,
       'city_code': cityCodeOverride ?? cityCode,
       'order_type': orderType ?? type.name,
       'from_address': pickupDisplay,
@@ -188,6 +215,7 @@ class DodooOrder {
       if (totPrice != null) 'order_total': totPrice,
       if (deliveryCharge != null) 'delivery_charge': deliveryCharge,
       if (tax != null) 'tax': tax,
+      if (walletAmount != null) 'wallet_amount': walletAmount,
       'customer_name': name ?? '',
       'customer_phone': contactNo ?? '',
       'store_name': storeId ?? storeName ?? '',

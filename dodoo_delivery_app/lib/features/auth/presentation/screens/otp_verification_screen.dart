@@ -9,6 +9,7 @@ import '../controllers/auth_controller.dart';
 import '../controllers/auth_state.dart';
 import '../widgets/otp_input_widget.dart';
 import 'account_status_screen.dart';
+import 'rider_registration_screen.dart';
 
 class OtpVerificationScreen extends ConsumerStatefulWidget {
   const OtpVerificationScreen({
@@ -123,6 +124,14 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
             (r) => false,
           );
         }
+      } else if (state is AuthNeedsRegistration) {
+        // OTP verified for a new number → go to the registration form.
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RiderRegistrationScreen(phone: state.phone),
+          ),
+        );
       } else if (state is AuthError) {
         _otpKey.currentState?.clear();
         setState(() { _otp = ''; _currentDevOtp = ''; });

@@ -100,16 +100,19 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
                 color: const Color(0xFF1C1D00).withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(9),
               ),
-              child: const Icon(Icons.local_shipping_rounded, size: 18),
+              child: const Icon(Icons.person_rounded, size: 18),
             ),
             const SizedBox(width: 10),
-            Image.asset(
-              'assets/images/dodoo_status.png',
-              height: 24,
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) => const Text('DoDoo Admin',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w800, letterSpacing: 0.2)),
+            Flexible(
+              child: Image.asset(
+                'assets/images/dodoo_status.png',
+                height: 28,
+                fit: BoxFit.contain,
+                alignment: Alignment.centerLeft,
+                errorBuilder: (_, _, _) => const Text('DoDoo Admin',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w800, letterSpacing: 0.2)),
+              ),
             ),
           ],
         ),

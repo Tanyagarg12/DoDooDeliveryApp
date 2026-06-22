@@ -10,8 +10,8 @@ class Validators {
 
   static String? otp(String? value) {
     if (value == null || value.trim().isEmpty) return 'OTP is required';
-    if (value.length != 6 || !RegExp(r'^\d{6}$').hasMatch(value)) {
-      return 'Enter the 6-digit OTP';
+    if (value.length != 4 || !RegExp(r'^\d{4}$').hasMatch(value)) {
+      return 'Enter the 4-digit OTP';
     }
     return null;
   }
@@ -68,13 +68,14 @@ class Validators {
     return null;
   }
 
-  /// Indian Driving License: 2 letters (state) + 2 digits (RTO) + optional
-  /// space/hyphen + 4-digit year + 7 digits. e.g. MH12 20110012345
+  /// Driving licence number. Indian DL formats vary widely (MH1420110012345,
+  /// DL-0420110149646, DLCAP00243142010, …), so accept any 8–20 alphanumeric
+  /// string (spaces/hyphens ignored) rather than enforcing one layout.
   static String? drivingLicenseFormat(String? value) {
     if (value == null || value.trim().isEmpty) return null; // optional here
-    final v = value.trim().toUpperCase();
-    if (!RegExp(r'^[A-Z]{2}[0-9]{2}[ -]?(19|20)[0-9]{2}[0-9]{7}$').hasMatch(v)) {
-      return 'Enter a valid DL number (e.g. MH12 20110012345)';
+    final v = value.replaceAll(RegExp(r'[ -]'), '').toUpperCase();
+    if (!RegExp(r'^[A-Z0-9]{8,20}$').hasMatch(v)) {
+      return 'Enter a valid DL number';
     }
     return null;
   }
