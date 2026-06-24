@@ -92,3 +92,42 @@ class AdminOrderStatus {
     return ongoing;
   }
 }
+
+/// The delivery progress a rider moves an order through, with the SAME labels
+/// everywhere they appear (order card + live-tracking screen) so the status
+/// wording is consistent across the app. We deliberately use a single,
+/// simple 4-step flow — no separate "in transit" vs "reached" — to avoid
+/// confusing riders.
+class RiderOrderFlow {
+  RiderOrderFlow._();
+
+  /// Internal status keys, in order. ('reached' is treated as 'in_transit'.)
+  static const steps = ['accepted', 'picked_up', 'in_transit', 'completed'];
+
+  /// Rider-facing label for each status. Older 'reached' rows map to 'On the Way'.
+  static const labels = {
+    'accepted': 'Accepted',
+    'picked_up': 'Picked Up',
+    'in_transit': 'On the Way',
+    'reached': 'On the Way',
+    'completed': 'Delivered',
+  };
+
+  /// Normalises a stored status onto the 4-step flow ('reached' → 'in_transit').
+  static String normalize(String? status) {
+    final s = status ?? 'accepted';
+    return s == 'reached' ? 'in_transit' : s;
+  }
+
+  /// The step the order is currently on (index into [steps]).
+  static int stepIndex(String? status) => steps.indexOf(normalize(status));
+
+  /// The next status to advance to, or null when delivered.
+  static String? next(String? status) {
+    final i = stepIndex(status);
+    if (i < 0 || i >= steps.length - 1) return null;
+    return steps[i + 1];
+  }
+
+  static String label(String? status) => labels[normalize(status)] ?? (status ?? '');
+}

@@ -166,8 +166,8 @@ class LocationTrackingService {
         intervalDuration: MapConfig.trackingMaxInterval,
         // Foreground service keeps tracking alive when the app is backgrounded.
         foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'DoDoo Rider — Live Tracking',
-          notificationText: 'Sharing your location for the active delivery.',
+          notificationTitle: 'DoDoo Rider — On delivery',
+          notificationText: 'Sharing your location with DoDoo for this delivery.',
           enableWakeLock: true,
           setOngoing: true,
         ),

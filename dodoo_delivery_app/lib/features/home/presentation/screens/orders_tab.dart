@@ -6,8 +6,23 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/city_selector.dart';
 import '../../../../core/widgets/fade_in.dart';
 import '../../../../core/widgets/support_modal.dart';
+import '../../../tracking/data/location_tracking_service.dart';
 import '../controllers/rider_dashboard_controller.dart';
 import '../widgets/order_card.dart';
+
+/// Distance (km) of an order, or null when absent/zero (so the chip is hidden).
+num? _chipKm(Map<String, dynamic> o) {
+  final v = o['distance_in_km'];
+  final n = v is num ? v : num.tryParse(v?.toString() ?? '');
+  return (n != null && n > 0) ? n : null;
+}
+
+/// ETA (minutes) of an order, or null when absent/zero.
+num? _chipEta(Map<String, dynamic> o) {
+  final v = o['estimated_time_minutes'];
+  final n = v is num ? v : num.tryParse(v?.toString() ?? '');
+  return (n != null && n > 0) ? n : null;
+}
 
 /// Filters a list of pending offers down to a single city code (null = all).
 List<Map<String, dynamic>> filterOffersByCity(
@@ -34,6 +49,23 @@ class _OrdersTabState extends ConsumerState<OrdersTab>
   void initState() {
     super.initState();
     _tc = TabController(length: 2, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoPickNearestCity());
+  }
+
+  /// Auto-selects the rider's NEAREST serviceable city from their GPS so they
+  /// see orders near them by default (e.g. a rider in/near Anantapur gets ATP
+  /// orders). Only runs if they haven't already picked a city, and only uses
+  /// the last known position (no surprise permission prompt) — proximity
+  /// matters while online, which is exactly when a position is available.
+  void _autoPickNearestCity() {
+    if (!mounted) return;
+    if (ref.read(riderCityFilterProvider) != null) return; // rider chose one
+    final pos = LocationTrackingService.instance.lastPosition;
+    if (pos == null) return;
+    final city = DodooCities.nearest(pos.latitude, pos.longitude);
+    if (city != null && ref.read(riderCityFilterProvider) == null) {
+      ref.read(riderCityFilterProvider.notifier).state = city.code;
+    }
   }
 
   @override
@@ -411,19 +443,19 @@ class _OfferCard extends ConsumerWidget {
                 ),
                 const SizedBox(height: 12),
 
-                // Meta chips
+                // Meta chips — distance/ETA only when the order carries them.
                 Wrap(
                   spacing: 8,
                   runSpacing: 6,
                   children: [
-                    _Chip(
-                        icon: Icons.straighten_rounded,
-                        label:
-                            '${order['distance_in_km'] ?? 0} km'),
-                    _Chip(
-                        icon: Icons.schedule_rounded,
-                        label:
-                            '${order['estimated_time_minutes'] ?? 30} min'),
+                    if (_chipKm(order) != null)
+                      _Chip(
+                          icon: Icons.straighten_rounded,
+                          label: '${_chipKm(order)} km'),
+                    if (_chipEta(order) != null)
+                      _Chip(
+                          icon: Icons.schedule_rounded,
+                          label: '${_chipEta(order)} min'),
                     if ((order['city_code']?.toString() ?? '').isNotEmpty)
                       _Chip(
                           icon: Icons.location_city_rounded,

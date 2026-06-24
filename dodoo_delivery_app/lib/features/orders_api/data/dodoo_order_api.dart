@@ -27,16 +27,15 @@ class DodooOrderApi {
 
   final Dio _dio;
 
-  /// POST GetAllTypeOrdersByCityStatusCombi → list of open orders for a city.
+  /// GET GetAllTypeOrdersByCity/{CityCode}/All → all orders for a city.
+  /// The endpoint is a GET (the city + "All" live in the path); it returns
+  /// every status, so callers filter to the ones they want.
   Future<List<DodooOrder>> getAllOrders({
     String cityCode = DodooApiConfig.defaultCityCode,
-    List<String> statusList = DodooApiConfig.openStatuses,
   }) async {
     try {
-      final res = await _dio.post<dynamic>(
-        '/GetAllTypeOrdersByCityStatusCombi',
-        data: {'CityCode': cityCode, 'Statuslist': statusList},
-      );
+      final res =
+          await _dio.get<dynamic>('/GetAllTypeOrdersByCity/$cityCode/All');
       return _parseList(res.data);
     } on DioException catch (e) {
       throw DodooApiException(_dioMessage(e));
@@ -64,6 +63,10 @@ class DodooOrderApi {
 
   /// Maps our internal order status to DoDoo's status word.
   /// Returns null for statuses there's nothing to push (e.g. 'pending').
+  /// Maps our internal order status to DoDoo's status word for UpdateOrderStatus.
+  /// DoDoo's real vocabulary (seen in the order data) is:
+  /// Open / Accept / InProgress / OnGoing / Deliver / Cancel — a delivered
+  /// order is recorded as "Deliver" (not "Completed").
   static String? dodooStatusFor(String internalStatus) {
     switch (internalStatus) {
       case 'accepted':
@@ -74,9 +77,9 @@ class DodooOrderApi {
       case 'reached':
         return 'OnGoing';
       case 'completed':
-        return 'Delivered';
+        return 'Deliver';
       case 'cancelled':
-        return 'Cancelled';
+        return 'Cancel';
       default:
         return null;
     }
@@ -89,13 +92,11 @@ class DodooOrderApi {
     return isStore ? 'Store' : 'PickDrop';
   }
 
-  /// The OrderID without its city prefix (ATP_STOR… → STOR…).
-  static String _shortId(String orderNumber) =>
-      orderNumber.contains('_') ? orderNumber.split('_').last : orderNumber;
-
   /// Pushes an order's status to DoDoo:
-  ///   GET /UpdateOrderStatus/{Type}/{Status}/{ShortOrderID}
-  /// Best-effort — never throws, so a DoDoo hiccup can't block the app flow.
+  ///   GET /UpdateOrderStatus/{Type}/{Status}/{OrderID}
+  /// IMPORTANT: DoDoo expects the FULL, city-prefixed OrderID here (e.g.
+  /// ATP_STOR…). The short form (STOR…) returns "Update Success" but is a
+  /// silent no-op — it does NOT change the order. Best-effort: never throws.
   Future<void> pushStatus({
     required String orderNumber,
     required String internalStatus,
@@ -107,9 +108,9 @@ class DodooOrderApi {
     final dodooStatus = dodooStatusFor(internalStatus);
     if (dodooStatus == null) return;
     final type = _typeSegment(orderNumber, orderType);
-    final id = _shortId(orderNumber);
     try {
-      await _dio.get<dynamic>('$path/$type/$dodooStatus/$id');
+      // Full OrderID (with the city prefix) — this is what actually updates.
+      await _dio.get<dynamic>('$path/$type/$dodooStatus/$orderNumber');
     } catch (_) {
       // Best-effort — DoDoo sync failures must not break the app flow.
     }

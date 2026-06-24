@@ -26,19 +26,24 @@ class AdminOrdersTab extends StatefulWidget {
 class AdminOrdersTabState extends State<AdminOrdersTab> {
   // Minutes a pending order may wait unpicked before auto re-broadcast + alert.
   static const _unpickedMinutes = 5;
+  // How many recent finished (delivered/cancelled) orders per city to backfill
+  // so the Completed/Cancelled sections show recent history — the endpoint
+  // returns thousands of years-old orders we must not import wholesale.
+  static const _recentFinishedPerCity = 40;
 
   final _dodoo = DodooOrderApi();
   final _admin = AdminFirestoreService.instance;
   final _searchCtrl = TextEditingController();
   Timer? _watchTimer;
+  StreamSubscription<List<Map<String, dynamic>>>? _ordersSub;
 
   List<Map<String, dynamic>> _orders = [];
   final Map<String, String> _riderNames = {}; // rider_id → name
   bool _loading = true;
   bool _syncing = false;
   String? _error;
-  // 'all' or an AdminOrderStatus.key (ongoing | inprogress | accepted | …)
-  String _filter = 'all';
+  // An AdminOrderStatus.key (ongoing | inprogress | accepted | completed | cancelled)
+  String _filter = 'ongoing';
   String _query = '';
   String? _cityCode; // selected delivery city; null = All cities
   int _reboardedAlert = 0; // # of orders auto re-broadcast in the last check
@@ -49,6 +54,17 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
   @override
   void initState() {
     super.initState();
+    // LIVE order list — updates the moment a rider changes a status.
+    _ordersSub = _admin.recentOrdersStream().listen((orders) {
+      if (!mounted) return;
+      setState(() {
+        _orders = orders;
+        _loading = false;
+        _error = null;
+      });
+    }, onError: (e) {
+      if (mounted) setState(() => _error = e.toString());
+    });
     load();
     // Watch for unpicked orders every 45s.
     _watchTimer = Timer.periodic(
@@ -59,26 +75,33 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
   void dispose() {
     _searchCtrl.dispose();
     _watchTimer?.cancel();
+    _ordersSub?.cancel();
     super.dispose();
   }
 
-  /// Public so the dashboard can trigger a refresh.
+  /// Public so the dashboard can trigger a refresh. The order list itself comes
+  /// from the LIVE stream (see initState); here we just (re)load rider names and
+  /// pull fresh DoDoo orders in the BACKGROUND — never blocking the display.
   Future<void> load({bool silent = false}) async {
-    if (!silent) setState(() => _loading = true);
-    // Pull any new DoDoo orders first (best-effort, non-blocking on failure).
-    await _syncFromDodoo();
-    await _checkUnpicked();
+    await _loadRiderNames();
+    await _backgroundSync();
+  }
+
+  Future<void> _loadRiderNames() async {
     try {
       final names = await _admin.riderNames();
       _riderNames
         ..clear()
         ..addAll(names);
-      _orders = await _admin.recentOrders(limit: 200);
-      _error = null;
-    } catch (e) {
-      _error = e.toString();
-    }
-    if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() {});
+    } catch (_) {/* names are best-effort */}
+  }
+
+  /// Pulls fresh orders from DoDoo into Firestore; the live stream then updates
+  /// the list automatically.
+  Future<void> _backgroundSync() async {
+    await _syncFromDodoo();
+    await _checkUnpicked();
   }
 
   /// Fetches open orders from the DoDoo API and imports any that aren't already
@@ -101,10 +124,44 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
       final syncedCities = <String>{};
       for (final city in cities) {
         final pricePerKm = await _admin.pricePerKm(cityCode: city.code);
-        final orders = await _dodoo.getAllOrders(cityCode: city.code);
+        final allOrders = await _dodoo.getAllOrders(cityCode: city.code);
+
+        // Bucket by status so each lands in its admin section. The endpoint
+        // returns thousands of years-old finished orders, so:
+        //  • Open      → full detail + broadcast to riders (dispatch).
+        //  • Active     (Accept/InProgress/OnGoing) → sparse, no broadcast.
+        //  • Finished   (Deliver/Cancel) → only the most-recent few, sparse.
+        final open = <DodooOrder>[];
+        final active = <DodooOrder>[];
+        final finished = <DodooOrder>[];
+        for (final o in allOrders) {
+          switch (o.internalStatus) {
+            case 'pending':
+              open.add(o);
+            case 'completed':
+            case 'cancelled':
+              finished.add(o);
+            default: // accepted / picked_up / in_transit
+              active.add(o);
+          }
+        }
+        finished.sort((a, b) =>
+            (b.orderDate ?? '').compareTo(a.orderDate ?? ''));
+        final recentFinished =
+            finished.take(_recentFinishedPerCity).toList();
+
         syncedCities.add(city.code);
-        openIds.addAll(orders.map((o) => o.orderId));
-        imported += await _importOrders(orders, city, pricePerKm, riderIds);
+        openIds.addAll(open.map((o) => o.orderId));
+
+        // Only OPEN orders are dispatched to riders + counted as "new".
+        imported +=
+            await _importOrders(open, city, pricePerKm, riderIds);
+        // Active + recent finished: imported so the sections show, but sparse
+        // (no per-order detail fetch) and never broadcast.
+        await _importOrders(active, city, pricePerKm, const [],
+            fetchDetail: false);
+        await _importOrders(recentFinished, city, pricePerKm, const [],
+            fetchDetail: false);
       }
 
       // Pull-sync: any of our still-pending orders that DoDoo no longer lists
@@ -140,8 +197,9 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
     List<DodooOrder> orders,
     DodooCity city,
     double? pricePerKm,
-    List<String> riderIds,
-  ) async {
+    List<String> riderIds, {
+    bool fetchDetail = true,
+  }) async {
     if (orders.isEmpty) return 0;
 
     final ids = orders.map((o) => o.orderId).toList();
@@ -151,14 +209,17 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
     if (newOnes.isEmpty) return 0;
 
     for (final o in newOnes) {
-      // The list rows are sparse (just id/status/date). Fetch the full detail
-      // (addresses, customer, items, pricing) so the order isn't imported blank.
+      // For dispatched (Open) orders, fetch the full detail (addresses,
+      // customer, items, pricing) so they aren't blank. For history/active
+      // backfill we keep the sparse list row to avoid thousands of calls.
       var full = o;
-      try {
-        final detail =
-            await _dodoo.getOrderDetail(o.orderId, orderType: o.orderType);
-        if (detail != null && !detail.isNoData) full = detail;
-      } catch (_) {/* keep the sparse list row if detail fails */}
+      if (fetchDetail) {
+        try {
+          final detail =
+              await _dodoo.getOrderDetail(o.orderId, orderType: o.orderType);
+          if (detail != null && !detail.isNoData) full = detail;
+        } catch (_) {/* keep the sparse list row if detail fails */}
+      }
 
       final data = full.toSupabaseOrder(
           pricePerKm: pricePerKm, cityCodeOverride: city.code);
@@ -473,9 +534,9 @@ class _FilterRow extends StatelessWidget {
   final Map<String, int> counts;
   final void Function(String) onChanged;
 
-  /// 'all' + the five business statuses, in workflow order.
+  /// The five business statuses, in workflow order (no 'All' — it loaded
+  /// everything and was slow).
   static final List<({String key, String label})> _entries = [
-    (key: 'all', label: 'All'),
     for (final s in AdminOrderStatus.all) (key: s.key, label: s.label),
   ];
 

@@ -12,14 +12,6 @@ class DodooApiConfig {
   /// Default city for the admin "import orders" screen (editable in the UI).
   static const String defaultCityCode = 'ATP';
 
-  /// Order statuses considered "available to dispatch".
-  static const List<String> openStatuses = [
-    'Open',
-    'Accept',
-    'InProgress',
-    'OnGoing',
-  ];
-
   /// DoDoo status-update endpoint. Called as:
   ///   GET {baseUrl}/UpdateOrderStatus/{Type}/{Status}/{ShortOrderID}
   /// e.g. /UpdateOrderStatus/Store/InProgress/STOR20260616193554136

@@ -19,6 +19,17 @@ class AdminFirestoreService {
     return snap.docs.map(_map).toList();
   }
 
+  /// LIVE stream of the most-recent orders (newest first). The admin list
+  /// subscribes to this so a rider's status change (accepted → picked_up →
+  /// delivered, etc.) shows up automatically, without a manual refresh.
+  Stream<List<Map<String, dynamic>>> recentOrdersStream({int limit = 200}) {
+    return Db.orders
+        .orderBy('created_at', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snap) => snap.docs.map(_map).toList());
+  }
+
   /// rider_id → display name, for every rider.
   Future<Map<String, String>> riderNames() async {
     final snap = await Db.riders.get();
@@ -85,10 +96,11 @@ class AdminFirestoreService {
     Map<String, dynamic> orderData,
     List<String> riderIds,
   ) async {
-    final ref = await Db.orders.add({
-      ...orderData,
-      'created_at': FieldValue.serverTimestamp(),
-    });
+    final data = {...orderData};
+    // Keep the real order time (set from the DoDoo OrderDate) for sorting;
+    // only fall back to the server clock when the order carries no date.
+    data['created_at'] = data['created_at'] ?? FieldValue.serverTimestamp();
+    final ref = await Db.orders.add(data);
     await _broadcast(ref.id, riderIds);
   }
 

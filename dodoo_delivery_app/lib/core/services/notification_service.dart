@@ -25,6 +25,16 @@ class NotificationService {
     await _plugin.initialize(
       const InitializationSettings(android: android, iOS: darwin),
     );
+
+    // Android 13+ requires explicit runtime permission, or notifications (and
+    // their sound) never appear. Best-effort — older Androids return null.
+    try {
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    } catch (_) {/* not on Android / not supported */}
+
     await NotificationCenter.instance.load();
     _initialized = true;
   }

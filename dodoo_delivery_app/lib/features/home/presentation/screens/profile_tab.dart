@@ -721,29 +721,36 @@ class _DocumentsCard extends StatelessWidget {
             ),
           ),
 
-          // Pending re-verification banner
-          if (!state.isDocumentVerified)
+          // Message from the admin (e.g. "Aadhaar is blurry, please re-upload").
+          if (state.adminComment.trim().isNotEmpty)
             Container(
               margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: AppColors.amber.withValues(alpha: 0.12),
+                color: const Color(0xFFFEF3C7),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                    color: AppColors.amber.withValues(alpha: 0.4)),
+                border: Border.all(color: const Color(0xFFFCD34D)),
               ),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.hourglass_top_rounded,
-                      size: 16, color: AppColors.amber),
+                  const Icon(Icons.campaign_rounded,
+                      size: 16, color: Color(0xFFB45309)),
                   const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      'Documents pending admin re-verification.',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.amber,
-                          fontWeight: FontWeight.w500),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Message from DoDoo',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF92400E))),
+                        const SizedBox(height: 2),
+                        Text(state.adminComment.trim(),
+                            style: const TextStyle(
+                                fontSize: 12.5, color: Color(0xFF92400E))),
+                      ],
                     ),
                   ),
                 ],
@@ -763,6 +770,7 @@ class _DocumentsCard extends StatelessWidget {
             label: 'Aadhaar Card — Front',
             icon: Icons.credit_card_outlined,
             imageUrl: state.aadhaarFrontUrl,
+            status: state.docStatus('aadhar_front'),
             uploading: uploadingAadharFront,
             onReplace: onReplaceAadharFront,
           ),
@@ -770,6 +778,7 @@ class _DocumentsCard extends StatelessWidget {
             label: 'Aadhaar Card — Back',
             icon: Icons.credit_card_outlined,
             imageUrl: state.aadhaarBackUrl,
+            status: state.docStatus('aadhar_back'),
             uploading: uploadingAadharBack,
             onReplace: onReplaceAadharBack,
           ),
@@ -777,6 +786,7 @@ class _DocumentsCard extends StatelessWidget {
             label: 'Driving License',
             icon: Icons.drive_eta_outlined,
             imageUrl: state.licenseImageUrl,
+            status: state.docStatus('license'),
             uploading: uploadingLicense,
             onReplace: onReplaceLicense,
           ),
@@ -792,6 +802,7 @@ class _DocTile extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.imageUrl,
+    required this.status,
     required this.uploading,
     required this.onReplace,
   });
@@ -799,6 +810,7 @@ class _DocTile extends StatelessWidget {
   final String label;
   final IconData icon;
   final String imageUrl;
+  final String status; // 'verified' | 'rejected' | 'pending'
   final bool uploading;
   final VoidCallback onReplace;
 
@@ -832,15 +844,13 @@ class _DocTile extends StatelessWidget {
                 Text(label,
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w500)),
-                const SizedBox(height: 2),
-                Text(
-                  hasImage ? 'Uploaded' : 'Not uploaded',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: hasImage
-                          ? AppColors.online
-                          : cs.onSurfaceVariant),
-                ),
+                const SizedBox(height: 4),
+                if (!hasImage)
+                  Text('Not uploaded',
+                      style: TextStyle(
+                          fontSize: 11, color: cs.onSurfaceVariant))
+                else
+                  _StatusPill(status: status),
               ],
             ),
           ),
@@ -877,6 +887,40 @@ class _DocTile extends StatelessWidget {
       height: 44,
       color: cs.surfaceContainerHighest,
       child: Icon(icon, size: 22, color: cs.onSurfaceVariant),
+    );
+  }
+}
+
+/// Per-document verification chip. Reflects the admin's decision and updates
+/// automatically (the dashboard refreshes the rider doc), so once the admin
+/// approves/rejects, the "Pending review" line is replaced here on its own.
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.status});
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final (Color color, IconData icon, String label) = switch (status) {
+      'verified' => (AppColors.online, Icons.verified_rounded, 'Verified'),
+      'rejected' => (
+          AppColors.error,
+          Icons.cancel_rounded,
+          'Rejected — please re-upload'
+        ),
+      _ => (AppColors.amber, Icons.hourglass_top_rounded, 'Pending review'),
+    };
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11, color: color, fontWeight: FontWeight.w700),
+              overflow: TextOverflow.ellipsis),
+        ),
+      ],
     );
   }
 }

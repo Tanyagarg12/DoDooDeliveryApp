@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,7 +6,8 @@ import '../controllers/auth_controller.dart';
 import '../controllers/auth_state.dart';
 
 /// Shown when a rider's account is pending, rejected, or suspended.
-/// Auto-refreshes every 30 s and on app-resume so approval changes propagate.
+/// Refreshes on app-resume and via the manual "Check Status Now" button — no
+/// background polling, to keep server load low.
 class AccountStatusScreen extends ConsumerStatefulWidget {
   const AccountStatusScreen({super.key, required this.rider});
 
@@ -21,19 +20,16 @@ class AccountStatusScreen extends ConsumerStatefulWidget {
 
 class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen>
     with WidgetsBindingObserver {
-  Timer? _timer;
   bool _refreshing = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _startTimer();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -41,10 +37,6 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) _refresh();
-  }
-
-  void _startTimer() {
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _refresh());
   }
 
   Future<void> _refresh() async {
@@ -111,11 +103,44 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen>
                 ),
               ],
               const SizedBox(height: 24),
+              if ((widget.rider.adminComment ?? '').trim().isNotEmpty) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFFCD34D)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: const [
+                          Icon(Icons.campaign_rounded,
+                              size: 16, color: Color(0xFFB45309)),
+                          SizedBox(width: 6),
+                          Text('Message from DoDoo',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF92400E))),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(widget.rider.adminComment!.trim(),
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF92400E))),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
               _DetailCard(rider: widget.rider, config: config),
               if (widget.rider.isPending) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Auto-checking every 30 s',
+                  'Tap "Check Status Now" to refresh',
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                 ),
               ],

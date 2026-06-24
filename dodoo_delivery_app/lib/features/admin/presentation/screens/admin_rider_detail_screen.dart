@@ -1,7 +1,9 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/firebase/firebase_refs.dart';
 import '../../../../core/widgets/support_modal.dart';
 import '../../domain/entities/admin_entities.dart';
 import 'admin_rider_performance.dart';
@@ -29,10 +31,22 @@ class AdminRiderDetailScreen extends ConsumerStatefulWidget {
 
 class _AdminRiderDetailScreenState
     extends ConsumerState<AdminRiderDetailScreen> {
+  // Per-document verification status + admin comment, read straight from the
+  // rider's Firestore doc (kept here, not in the entity).
+  Map<String, dynamic> _docStatus = {};
+  final _commentCtrl = TextEditingController();
+  bool _kycBusy = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _commentCtrl.dispose();
+    super.dispose();
   }
 
   String? get _token =>
@@ -44,6 +58,53 @@ class _AdminRiderDetailScreenState
     ref
         .read(adminRiderDetailControllerProvider(widget.riderId).notifier)
         .load(token);
+    _loadKyc();
+  }
+
+  /// Reads document_status + admin_comment from the rider doc.
+  Future<void> _loadKyc() async {
+    try {
+      final doc = await Db.riders.doc(widget.riderId).get();
+      final data = doc.data() ?? {};
+      if (!mounted) return;
+      setState(() {
+        _docStatus =
+            Map<String, dynamic>.from(data['document_status'] as Map? ?? {});
+        final c = data['admin_comment']?.toString() ?? '';
+        if (_commentCtrl.text.isEmpty) _commentCtrl.text = c;
+      });
+    } catch (_) {/* best-effort */}
+  }
+
+  /// Verify / reject a single document. Optimistic — updates the chip instantly
+  /// (so the buttons never grey out / "disappear") and writes in the background.
+  Future<void> _setDocStatus(String docType, String status) async {
+    setState(() => _docStatus = {..._docStatus, docType: status});
+    try {
+      await Db.riders.doc(widget.riderId).set({
+        'document_status': {docType: status},
+      }, SetOptions(merge: true));
+    } catch (_) {/* keep the optimistic value */}
+  }
+
+  /// Save the admin's comment to the rider (visible in the rider app).
+  Future<void> _saveComment() async {
+    FocusScope.of(context).unfocus();
+    setState(() => _kycBusy = true);
+    try {
+      await Db.riders.doc(widget.riderId).set(
+        {'admin_comment': _commentCtrl.text.trim()},
+        SetOptions(merge: true),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Comment sent to rider.'),
+              backgroundColor: Color(0xFF059669)),
+        );
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _kycBusy = false);
   }
 
   Future<void> _takeAction(
@@ -168,7 +229,14 @@ class _AdminRiderDetailScreenState
                   const SizedBox(height: 16),
                   RiderPerformanceSection(riderId: widget.riderId),
                   const SizedBox(height: 16),
-                  _DocumentsSection(rider: rider),
+                  _DocumentsSection(
+                    rider: rider,
+                    docStatus: _docStatus,
+                    busy: _kycBusy,
+                    onSetStatus: _setDocStatus,
+                    commentCtrl: _commentCtrl,
+                    onSaveComment: _saveComment,
+                  ),
                   const SizedBox(height: 16),
                   _AuditLog(logs: rider.approvalLogs),
                   if (rider.accountStatus == 'approved') ...[
@@ -668,52 +736,172 @@ class _InfoRow extends StatelessWidget {
 // ── Documents section ─────────────────────────────────────────────────────────
 
 class _DocumentsSection extends StatelessWidget {
-  const _DocumentsSection({required this.rider});
+  const _DocumentsSection({
+    required this.rider,
+    required this.docStatus,
+    required this.busy,
+    required this.onSetStatus,
+    required this.commentCtrl,
+    required this.onSaveComment,
+  });
   final AdminRider rider;
+  final Map<String, dynamic> docStatus;
+  final bool busy;
+  final void Function(String docType, String status) onSetStatus;
+  final TextEditingController commentCtrl;
+  final VoidCallback onSaveComment;
+
+  static const _lime = Color(0xFFBABC2F);
 
   @override
   Widget build(BuildContext context) {
-    final docs = <(String, String?)>[
-      ('Profile Photo', rider.profilePictureUrl),
-      ('Aadhaar Front', rider.aadhaarFrontUrl),
-      ('Aadhaar Back', rider.aadhaarBackUrl),
-      ('Driving License', rider.drivingLicenseImageUrl),
-    ].where((d) => d.$2 != null && d.$2!.isNotEmpty).toList();
-
-    if (docs.isEmpty) {
-      return _Card(
-        child: const Text(
-          'No documents uploaded yet.',
-          style: TextStyle(color: Colors.grey),
-        ),
-      );
-    }
+    final docs = <(String label, String key, String? url)>[
+      ('Profile Photo', 'profile', rider.profilePictureUrl),
+      ('Aadhaar Front', 'aadhar_front', rider.aadhaarFrontUrl),
+      ('Aadhaar Back', 'aadhar_back', rider.aadhaarBackUrl),
+      ('Driving License', 'license', rider.drivingLicenseImageUrl),
+    ].where((d) => d.$3 != null && d.$3!.isNotEmpty).toList();
 
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Documents',
-              style:
-                  TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+          const Text('Documents & verification',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
           const SizedBox(height: 12),
-          ...docs.map(
-            (d) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    d.$1,
-                    style: TextStyle(
-                        color: Colors.grey.shade600, fontSize: 12),
-                  ),
-                  const SizedBox(height: 6),
-                  _DocImage(url: d.$2!),
-                ],
-              ),
+          if (docs.isEmpty)
+            const Text('No documents uploaded yet.',
+                style: TextStyle(color: Colors.grey))
+          else
+            ...docs.map((d) => _docTile(d.$1, d.$2, d.$3!)),
+          const Divider(height: 24),
+          const Text('Comment to rider',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          const SizedBox(height: 6),
+          Text('Sent to the rider (e.g. "Aadhaar is blurry, please re-upload").',
+              style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: commentCtrl,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              hintText: 'Message to the rider…',
+              border: OutlineInputBorder(),
+              isDense: true,
             ),
           ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: busy ? null : onSaveComment,
+              icon: const Icon(Icons.send_rounded, size: 16),
+              label: const Text('Send to rider'),
+              style: FilledButton.styleFrom(
+                  backgroundColor: _lime, minimumSize: const Size.fromHeight(46)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _docTile(String label, String key, String url) {
+    final status = docStatus[key]?.toString() ?? 'pending';
+    final (Color color, String text) = switch (status) {
+      'verified' => (const Color(0xFF059669), 'Verified'),
+      'rejected' => (const Color(0xFFDC2626), 'Rejected'),
+      _ => (const Color(0xFFD97706), 'Pending'),
+    };
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(label,
+                    style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600)),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6)),
+                child: Text(text,
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          _DocImage(url: url),
+          const SizedBox(height: 8),
+          // Verify / Reject only while the document is still pending review.
+          // After the admin acts, the buttons disappear; they come back only
+          // when the rider re-uploads this document (which resets the status
+          // back to 'pending' from the rider app).
+          if (status == 'pending')
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => onSetStatus(key, 'verified'),
+                    icon: const Icon(Icons.check_circle_rounded, size: 16),
+                    label: const Text('Verify'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF059669),
+                      side: const BorderSide(color: Color(0xFF059669)),
+                      minimumSize: const Size(0, 40),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => onSetStatus(key, 'rejected'),
+                    icon: const Icon(Icons.cancel_rounded, size: 16),
+                    label: const Text('Reject'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFDC2626),
+                      side: const BorderSide(color: Color(0xFFFCA5A5)),
+                      minimumSize: const Size(0, 40),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Icon(
+                  status == 'verified'
+                      ? Icons.check_circle_rounded
+                      : Icons.cancel_rounded,
+                  size: 15,
+                  color: color,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    status == 'verified'
+                        ? 'Verified — buttons return if the rider re-uploads.'
+                        : 'Rejected — buttons return if the rider re-uploads.',
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: Colors.grey.shade600,
+                        fontStyle: FontStyle.italic),
+                  ),
+                ),
+              ],
+            ),
         ],
       ),
     );

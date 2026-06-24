@@ -24,6 +24,9 @@ class AdminRepositoryImpl implements AdminRepository {
   Future<void> clearToken() => _ds.clearToken();
 
   @override
+  Future<void> ensureSession() => _ds.ensureSession();
+
+  @override
   Future<DashboardStats> getStats(String token) => _ds.getStats(token);
 
   @override

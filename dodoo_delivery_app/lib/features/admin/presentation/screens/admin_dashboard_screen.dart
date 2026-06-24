@@ -599,9 +599,9 @@ class _RiderCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               // Avatar with a live current-status dot.
               Stack(
@@ -652,42 +652,18 @@ class _RiderCard extends StatelessWidget {
                         _StatusBadge(status: rider.accountStatus),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(Icons.phone_rounded,
-                            size: 13, color: Colors.grey.shade500),
-                        const SizedBox(width: 4),
-                        Text(
-                          rider.phone.isEmpty ? 'No phone' : rider.phone,
-                          style: TextStyle(
-                              color: Colors.grey.shade700,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        _meta(Icons.star_rounded,
-                            rider.rating.toStringAsFixed(1),
-                            color: const Color(0xFFD97706)),
-                        _meta(Icons.inventory_2_rounded,
-                            '${rider.totalOrders} orders'),
-                        _meta(Icons.event_rounded,
-                            'Joined ${_fmtDate(rider.joinedDate)}'),
-                      ],
+                    const SizedBox(height: 3),
+                    Text(
+                      _subline(rider),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: Colors.grey.shade600, fontSize: 12),
                     ),
                   ],
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Icon(Icons.chevron_right, color: Colors.grey),
-              ),
+              const Icon(Icons.chevron_right, color: Colors.grey),
             ],
           ),
         ),
@@ -701,25 +677,14 @@ class _RiderCard extends StatelessWidget {
         _ => const Color(0xFF94A3B8),
       };
 
-  Widget _meta(IconData icon, String text, {Color? color}) {
-    final c = color ?? const Color(0xFF475569);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: c.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: c),
-          const SizedBox(width: 4),
-          Text(text,
-              style: TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600, color: c)),
-        ],
-      ),
-    );
+  /// Compact text-only subline: phone · ★rating · N orders · joined date.
+  static String _subline(AdminRider r) {
+    return [
+      r.phone.isEmpty ? 'No phone' : r.phone,
+      '★ ${r.rating.toStringAsFixed(1)}',
+      '${r.totalOrders} orders',
+      'Joined ${_fmtDate(r.joinedDate)}',
+    ].join('  ·  ');
   }
 
   static String _fmtDate(DateTime d) =>

@@ -23,6 +23,12 @@ class MapConfig {
       directionsApiKey.isNotEmpty &&
       directionsApiKey != 'YOUR_GOOGLE_MAPS_API_KEY_HERE';
 
+  /// Set to true ONLY after a real Google Maps API key (with "Maps SDK for
+  /// Android" enabled) is placed in AndroidManifest.xml. While false, the admin
+  /// live-tracking screen shows a rider LIST with "Open in Google Maps" links
+  /// instead of an embedded (blank) map — so it works without a key/billing.
+  static const bool embeddedMapEnabled = false;
+
   /// Fallback camera target when we have no location yet (central India).
   static const double defaultLat = 20.5937;
   static const double defaultLng = 78.9629;

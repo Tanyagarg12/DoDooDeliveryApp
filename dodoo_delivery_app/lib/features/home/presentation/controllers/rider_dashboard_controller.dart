@@ -89,6 +89,7 @@ class RiderDashboardController
   void dispose() {
     _pollTimer?.cancel();
     _offlineTimer?.cancel();
+    SoundService.instance.stopAlert();
     LocationTrackingService.instance.stop();
     super.dispose();
   }
@@ -154,13 +155,19 @@ class RiderDashboardController
       // The first not-yet-seen offer drives the in-app incoming sheet.
       final newOffer = _findNewOffer(offers);
 
-      // Push a local notification for every brand-new offer (broadcast dispatch).
+      // Notify for brand-new offers, but cap how many notifications we push so
+      // the rider isn't flooded — only the first couple ping; the rest still
+      // appear in the Offers tab (just without a notification banner).
+      const maxNotifications = 2;
       var hasBrandNewOffer = false;
+      var notified = 0;
       for (final o in offers) {
         final id = o['id'].toString();
         if (_shownOfferIds.contains(id)) continue;
         _shownOfferIds.add(id);
         hasBrandNewOffer = true;
+        if (notified >= maxNotifications) continue; // rest: Offers list only
+        notified++;
         final order = (o['order'] as Map?) ?? o;
         final amount = order['total_earning'] ?? order['minimum_fare'] ?? '0';
         final from =
@@ -173,12 +180,20 @@ class RiderDashboardController
             )
             .ignore();
       }
-      // Audible chime once per poll if a new order actually arrived — but not
-      // for the offers that were already waiting when the app first opened.
-      if (hasBrandNewOffer && !_firstDashboardLoad) {
-        SoundService.instance.playNewOrder().ignore();
-      }
+      final wasFirstLoad = _firstDashboardLoad;
       _firstDashboardLoad = false;
+
+      // Ring a LOOPING alert while there is an un-answered offer the rider can
+      // act on (and they're not already on a delivery). It keeps ringing until
+      // they accept/reject or the offer is taken — then we stop it. The very
+      // first dashboard load doesn't ring for already-waiting offers.
+      final canAct = offers.isNotEmpty && !state.hasActiveOrder;
+      final newArrival = hasBrandNewOffer && !wasFirstLoad;
+      if (canAct && (newArrival || SoundService.instance.isAlerting)) {
+        SoundService.instance.startAlertLoop().ignore();
+      } else if (!canAct) {
+        SoundService.instance.stopAlert().ignore();
+      }
 
       state = state.copyWith(
         rider: Map<String, dynamic>.from(data['rider'] ?? state.rider),
@@ -278,6 +293,7 @@ class RiderDashboardController
       return false;
     }
     _cancelOfferNotification(offer);
+    SoundService.instance.stopAlert().ignore();
     state = state.copyWith(isLoading: true);
     try {
       await _api.acceptOrder(orderId);
@@ -285,6 +301,10 @@ class RiderDashboardController
       try {
         await _api.setStatus('busy');
       } catch (_) {/* non-fatal — refresh will reconcile */}
+      // Ensure live location is shared during the delivery so the admin can
+      // track this rider on the live map (navigation replaces in-app tracking
+      // for the rider themselves).
+      LocationTrackingService.instance.start();
       NotificationService.instance
           .showOrderAssigned(
             title: 'Order assigned',
@@ -304,6 +324,7 @@ class RiderDashboardController
     final orderId = offer['order']?['id']?.toString() ?? offer['id']?.toString();
     if (orderId == null) return;
     _cancelOfferNotification(offer);
+    SoundService.instance.stopAlert().ignore();
     try {
       await _api.rejectOrder(orderId);
       if (!mounted) return;

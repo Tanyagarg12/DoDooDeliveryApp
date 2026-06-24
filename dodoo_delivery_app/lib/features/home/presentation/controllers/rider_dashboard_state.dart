@@ -64,6 +64,19 @@ class RiderDashboardState {
   String get aadhaarBackUrl => rider['aadhar_back_url']?.toString() ?? '';
   String get licenseImageUrl => rider['driving_license_image_url']?.toString() ?? '';
 
+  /// Per-document verification status set by the admin
+  /// (keys: 'profile' | 'aadhar_front' | 'aadhar_back' | 'license').
+  Map<String, dynamic> get documentStatus => rider['document_status'] is Map
+      ? Map<String, dynamic>.from(rider['document_status'] as Map)
+      : const {};
+
+  /// Status of a single document: 'verified' | 'rejected' | 'pending'.
+  String docStatus(String key) =>
+      documentStatus[key]?.toString() ?? 'pending';
+
+  /// Free-text message the admin sent to this rider (e.g. "Aadhaar is blurry").
+  String get adminComment => rider['admin_comment']?.toString() ?? '';
+
   double get walletBalance =>
       double.tryParse(rider['wallet_balance']?.toString() ?? '0') ?? 0;
   double get rating =>

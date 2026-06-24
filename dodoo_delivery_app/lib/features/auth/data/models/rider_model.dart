@@ -20,6 +20,7 @@ class RiderModel extends RiderEntity {
     required super.totalOrders,
     required super.isVerified,
     required super.isDocumentVerified,
+    super.adminComment,
   });
 
   factory RiderModel.fromJson(Map<String, dynamic> json) {
@@ -40,6 +41,7 @@ class RiderModel extends RiderEntity {
       totalOrders: (json['total_orders'] as num?)?.toInt() ?? 0,
       isVerified: json['is_verified'] as bool? ?? false,
       isDocumentVerified: json['is_document_verified'] as bool? ?? false,
+      adminComment: json['admin_comment']?.toString(),
     );
   }
 
@@ -60,6 +62,7 @@ class RiderModel extends RiderEntity {
         'total_orders': totalOrders,
         'is_verified': isVerified,
         'is_document_verified': isDocumentVerified,
+        'admin_comment': adminComment,
       };
 
   String toJsonString() => jsonEncode(toJson());

@@ -17,6 +17,12 @@ abstract class AuthRepository {
   /// Return the locally cached rider, or null if not logged in.
   Future<RiderEntity?> getCachedRider();
 
+  /// Restore a previously logged-in rider on app launch: reads the saved
+  /// session, re-establishes [RiderSession] + the anonymous Firebase session,
+  /// and refreshes the rider from Firestore. Returns null if nobody is logged
+  /// in (so the app shows the login screen).
+  Future<RiderEntity?> restoreSession();
+
   /// Clear tokens and cached rider data (logout).
   Future<void> logout();
 

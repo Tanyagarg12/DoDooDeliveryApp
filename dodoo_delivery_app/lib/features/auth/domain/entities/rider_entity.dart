@@ -31,6 +31,7 @@ class RiderEntity {
   final int totalOrders;
   final bool isVerified;
   final bool isDocumentVerified;
+  final String? adminComment;
 
   const RiderEntity({
     required this.id,
@@ -49,6 +50,7 @@ class RiderEntity {
     required this.totalOrders,
     required this.isVerified,
     required this.isDocumentVerified,
+    this.adminComment,
   });
 
   String get fullName => '$firstName $lastName'.trim();
@@ -75,6 +77,7 @@ class RiderEntity {
     int? totalOrders,
     bool? isVerified,
     bool? isDocumentVerified,
+    String? adminComment,
   }) {
     return RiderEntity(
       id: id ?? this.id,
@@ -93,6 +96,7 @@ class RiderEntity {
       totalOrders: totalOrders ?? this.totalOrders,
       isVerified: isVerified ?? this.isVerified,
       isDocumentVerified: isDocumentVerified ?? this.isDocumentVerified,
+      adminComment: adminComment ?? this.adminComment,
     );
   }
 }

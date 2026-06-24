@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/dodoo_cities.dart';
 import '../../../../core/constants/map_config.dart';
@@ -15,7 +16,10 @@ import '../../../../core/widgets/city_selector.dart';
 /// location. Positions stream in realtime from `rider_tracking`; statuses
 /// refresh on a short interval.
 class AdminLiveMapScreen extends StatefulWidget {
-  const AdminLiveMapScreen({super.key});
+  const AdminLiveMapScreen({super.key, this.focusRiderId});
+
+  /// When set, the map auto-centres on this rider once their location loads.
+  final String? focusRiderId;
 
   @override
   State<AdminLiveMapScreen> createState() => _AdminLiveMapScreenState();
@@ -55,6 +59,7 @@ class _AdminLiveMapScreenState extends State<AdminLiveMapScreen> {
   final Map<String, Map<String, dynamic>> _tracking = {};
   bool _loading = true;
   String? _cityFilter; // null = All cities
+  bool _focusedTarget = false;
 
   @override
   void initState() {
@@ -97,6 +102,7 @@ class _AdminLiveMapScreenState extends State<AdminLiveMapScreen> {
         _tracking[doc.id] = m;
       }
       setState(() {});
+      _maybeFocusTarget();
     });
   }
 
@@ -170,14 +176,19 @@ class _AdminLiveMapScreenState extends State<AdminLiveMapScreen> {
           ),
         ],
       ),
-      body: Stack(
+      body: !MapConfig.embeddedMapEnabled
+          ? _listBody(rows, located)
+          : Stack(
         children: [
           GoogleMap(
             initialCameraPosition: const CameraPosition(
               target: LatLng(MapConfig.defaultLat, MapConfig.defaultLng),
               zoom: 5,
             ),
-            onMapCreated: (c) => _map = c,
+            onMapCreated: (c) {
+              _map = c;
+              _maybeFocusTarget();
+            },
             markers: _markers(rows),
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
@@ -265,7 +276,7 @@ class _AdminLiveMapScreenState extends State<AdminLiveMapScreen> {
           ),
         ],
       ),
-      floatingActionButton: located > 0
+      floatingActionButton: (MapConfig.embeddedMapEnabled && located > 0)
           ? Padding(
               padding: const EdgeInsets.only(bottom: 280),
               child: FloatingActionButton.extended(
@@ -278,6 +289,67 @@ class _AdminLiveMapScreenState extends State<AdminLiveMapScreen> {
             )
           : null,
     );
+  }
+
+  /// Map-less rider list (used while no Google Maps key is configured).
+  /// Each rider can be opened in the external Google Maps app.
+  Widget _listBody(List<_RiderRow> rows, int located) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          child: CitySelector(
+            value: _cityFilter,
+            includeAll: true,
+            label: 'Showing',
+            onChanged: (code) => setState(() => _cityFilter = code),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: Row(
+            children: [
+              Text('$located with live location',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Refresh',
+                icon: const Icon(Icons.refresh_rounded, size: 20),
+                onPressed: () => _loadRiders(),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : rows.isEmpty
+                  ? Center(
+                      child: Text(_cityFilter == null
+                          ? 'No approved riders.'
+                          : 'No riders in ${DodooCities.byCode(_cityFilter).name}.'))
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: rows.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 6),
+                      itemBuilder: (_, i) => _RiderTile(
+                        row: rows[i],
+                        onTap: () => _openInMaps(rows[i]),
+                      ),
+                    ),
+        ),
+      ],
+    );
+  }
+
+  /// Opens a rider's last-known location in the external Google Maps app.
+  Future<void> _openInMaps(_RiderRow r) async {
+    if (!r.hasLocation) return;
+    final uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lng}');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   Set<Marker> _markers(List<_RiderRow> rows) {
@@ -302,6 +374,20 @@ class _AdminLiveMapScreenState extends State<AdminLiveMapScreen> {
         'busy' => BitmapDescriptor.hueOrange,
         _ => BitmapDescriptor.hueAzure,
       };
+
+  /// Auto-centres on [widget.focusRiderId] once both the map and that rider's
+  /// location are available (used when admin taps "Track rider").
+  void _maybeFocusTarget() {
+    if (_focusedTarget) return;
+    final target = widget.focusRiderId;
+    if (target == null || _map == null) return;
+    final t = _tracking[target];
+    final lat = t == null ? null : MapUtils.toDouble(t['latitude']);
+    final lng = t == null ? null : MapUtils.toDouble(t['longitude']);
+    if (lat == null || lng == null) return;
+    _focusedTarget = true;
+    _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 15));
+  }
 
   Future<void> _focus(_RiderRow r) async {
     if (!r.hasLocation || _map == null) return;
@@ -424,6 +510,11 @@ class _RiderTile extends StatelessWidget {
                     ),
                 ],
               ),
+              if (row.hasLocation) ...[
+                const SizedBox(width: 8),
+                const Icon(Icons.open_in_new_rounded,
+                    size: 16, color: Color(0xFFBABC2F)),
+              ],
             ],
           ),
         ),

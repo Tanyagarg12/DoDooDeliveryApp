@@ -8,9 +8,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 enum NotificationType { newOrder, orderAssigned, payment, support, approval, general }
 
 extension NotificationTypeInfo on NotificationType {
+  // NOTE: a channel's sound is fixed when Android first creates it. To change
+  // the sound on devices that already have the app, the channel id must change
+  // — hence the "_v2" suffix on the sound-carrying channels.
   String get channelId => switch (this) {
-        NotificationType.newOrder => 'new_orders_channel',
-        NotificationType.orderAssigned => 'order_assigned_channel',
+        NotificationType.newOrder => 'new_orders_channel_v2',
+        NotificationType.orderAssigned => 'order_assigned_channel_v2',
         NotificationType.payment => 'payment_channel',
         NotificationType.support => 'support_channel',
         NotificationType.approval => 'approval_channel',
@@ -26,15 +29,18 @@ extension NotificationTypeInfo on NotificationType {
         NotificationType.general => 'General',
       };
 
-  /// Optional custom sound file (without extension) placed in
+  /// Custom sound file (WITHOUT extension) placed in
   /// android/app/src/main/res/raw/. When null the channel uses the system
-  /// default sound. Set these once you add the audio files.
+  /// default sound.
+  ///
+  /// `new_order` maps to android/app/src/main/res/raw/new_order.mp3 — replace
+  /// that file (keep the same name) to change the new-order alert tone.
   String? get soundName => switch (this) {
-        NotificationType.newOrder => null, // e.g. 'alert'
-        NotificationType.orderAssigned => null, // e.g. 'success'
-        NotificationType.payment => null, // e.g. 'payment'
-        NotificationType.support => null, // e.g. 'message'
-        NotificationType.approval => null, // e.g. 'success'
+        NotificationType.newOrder => 'new_order',
+        NotificationType.orderAssigned => 'new_order',
+        NotificationType.payment => null,
+        NotificationType.support => null,
+        NotificationType.approval => null,
         NotificationType.general => null,
       };
 

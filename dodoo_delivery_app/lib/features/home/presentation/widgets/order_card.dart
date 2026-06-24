@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/constants/order_status.dart';
 import '../../../../core/constants/support_config.dart';
 import '../../../../core/theme/app_theme.dart';
-import '../../../tracking/presentation/screens/live_tracking_screen.dart';
+import '../../../../core/utils/maps_launcher.dart';
+import '../../../../core/utils/order_items.dart';
 import '../controllers/rider_dashboard_controller.dart';
 
 // ── Active Order Card ─────────────────────────────────────────────────────────
@@ -18,32 +20,13 @@ class ActiveOrderCard extends ConsumerWidget {
   final Map<String, dynamic> order;
   final bool isLoading;
 
-  static const _flow = [
-    'accepted',
-    'picked_up',
-    'in_transit',
-    'reached',
-    'completed',
-  ];
-
-  static const _flowLabels = {
-    'accepted': 'Accepted',
-    'picked_up': 'Picked Up',
-    'in_transit': 'In Transit',
-    'reached': 'Reached',
-    'completed': 'Delivered',
-  };
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
-    final status = order['status']?.toString() ?? 'accepted';
-    final currentStep = _flow.indexOf(status);
-    final nextStatus =
-        currentStep >= 0 && currentStep < _flow.length - 1
-            ? _flow[currentStep + 1]
-            : null;
+    final status = RiderOrderFlow.normalize(order['status']?.toString());
+    final currentStep = RiderOrderFlow.stepIndex(status);
+    final nextStatus = RiderOrderFlow.next(status);
 
     return Container(
       decoration: BoxDecoration(
@@ -90,7 +73,7 @@ class ActiveOrderCard extends ConsumerWidget {
                   ),
                 ),
                 _BadgeChip(
-                  label: _flowLabels[status] ?? status,
+                  label: RiderOrderFlow.label(status),
                   color: AppColors.onPrimary.withValues(alpha: 0.18),
                   textColor: AppColors.onPrimary,
                 ),
@@ -107,19 +90,23 @@ class ActiveOrderCard extends ConsumerWidget {
                 _RouteTimeline(order: order),
                 const SizedBox(height: 14),
 
-                // Info chips
+                // Info chips. Distance/ETA only show when the order actually
+                // carries them (DoDoo store orders often don't) — a missing
+                // value is hidden rather than shown as a misleading "0 km".
                 Wrap(
                   spacing: 8,
                   runSpacing: 6,
                   children: [
-                    _InfoChip(
-                      icon: Icons.straighten_rounded,
-                      label: '${order['distance_in_km'] ?? 0} km',
-                    ),
-                    _InfoChip(
-                      icon: Icons.schedule_rounded,
-                      label: '${order['estimated_time_minutes'] ?? 30} min',
-                    ),
+                    if (_km(order) != null)
+                      _InfoChip(
+                        icon: Icons.straighten_rounded,
+                        label: '${_km(order)} km',
+                      ),
+                    if (_eta(order) != null)
+                      _InfoChip(
+                        icon: Icons.schedule_rounded,
+                        label: '${_eta(order)} min',
+                      ),
                     _InfoChip(
                       icon: Icons.currency_rupee_rounded,
                       label: '${order['total_earning'] ?? order['minimum_fare'] ?? '0'}',
@@ -133,16 +120,21 @@ class ActiveOrderCard extends ConsumerWidget {
                 _CustomerItems(order: order),
 
                 // Progress stepper
-                _OrderStepper(currentStep: currentStep, flow: _flow, labels: _flowLabels),
+                _OrderStepper(
+                  currentStep: currentStep,
+                  flow: RiderOrderFlow.steps,
+                  labels: RiderOrderFlow.labels,
+                ),
                 const SizedBox(height: 14),
 
-                // Live tracking — full-width primary action
+                // Navigate — full-width primary action (opens Google Maps with
+                // turn-by-turn directions to the pickup/drop).
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: () => _openLiveTracking(context, ref),
-                    icon: const Icon(Icons.my_location_rounded, size: 18),
-                    label: const Text('Open Live Tracking'),
+                    onPressed: () => _openMaps(order),
+                    icon: const Icon(Icons.navigation_rounded, size: 18),
+                    label: const Text('Navigate'),
                     style: FilledButton.styleFrom(
                       minimumSize: const Size.fromHeight(46),
                       shape: RoundedRectangleBorder(
@@ -150,50 +142,31 @@ class ActiveOrderCard extends ConsumerWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 10),
-
-                // Secondary actions
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _openMaps(order),
-                        icon: const Icon(Icons.navigation_rounded, size: 16),
-                        label: const Text('Navigate'),
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size.fromHeight(42),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                          side: BorderSide(color: cs.primary),
-                          foregroundColor: cs.primary,
-                        ),
+                if (nextStatus != null) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: isLoading
+                          ? null
+                          : () => ref
+                              .read(riderDashboardProvider.notifier)
+                              .advanceOrderStatus(order, nextStatus),
+                      icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+                      label: Text(
+                        'Mark ${RiderOrderFlow.label(nextStatus)}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(44),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        side: BorderSide(color: cs.primary),
+                        foregroundColor: cs.primary,
                       ),
                     ),
-                    if (nextStatus != null) ...[
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: isLoading
-                              ? null
-                              : () => ref
-                                  .read(riderDashboardProvider.notifier)
-                                  .advanceOrderStatus(order, nextStatus),
-                          icon: const Icon(Icons.arrow_forward_rounded,
-                              size: 16),
-                          label: Text(
-                            'Mark ${_flowLabels[nextStatus] ?? nextStatus}',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size.fromHeight(42),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Center(
                   child: TextButton.icon(
@@ -212,22 +185,24 @@ class ActiveOrderCard extends ConsumerWidget {
     );
   }
 
-  Future<void> _openMaps(Map<String, dynamic> o) async {
-    final lat = o['to_latitude'];
-    final lng = o['to_longitude'];
-    if (lat == null || lng == null) return;
-    final uri = Uri.parse(
-        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving');
-    if (await canLaunchUrl(uri)) await launchUrl(uri);
+  /// Distance (km) only if the order actually has it. Null → hide the chip.
+  static num? _km(Map<String, dynamic> o) {
+    final v = o['distance_in_km'];
+    final n = v is num ? v : num.tryParse(v?.toString() ?? '');
+    return (n != null && n > 0) ? n : null;
   }
 
-  Future<void> _openLiveTracking(BuildContext context, WidgetRef ref) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => LiveTrackingScreen(order: order)),
-    );
-    // Status may have advanced inside the tracking screen — refresh the list.
-    ref.read(riderDashboardProvider.notifier).refresh();
+  /// ETA (minutes) only if present. Null → hide the chip.
+  static num? _eta(Map<String, dynamic> o) {
+    final v = o['estimated_time_minutes'];
+    final n = v is num ? v : num.tryParse(v?.toString() ?? '');
+    return (n != null && n > 0) ? n : null;
   }
+
+  /// Opens external Google Maps directions. Routes to the drop address; uses
+  /// the address text when there are no coordinates (DoDoo store orders).
+  Future<void> _openMaps(Map<String, dynamic> o) =>
+      openOrderDirections(o, toPickup: false);
 
   /// Riders never get the customer's number — calls go to support instead.
   Future<void> _callSupport() async {
@@ -246,8 +221,7 @@ class _CustomerItems extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final customer = order['customer_name']?.toString() ?? '';
-    final items =
-        (order['items_description'] ?? order['items'])?.toString() ?? '';
+    final items = orderItemLines(order);
     if (customer.isEmpty && items.isEmpty) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
@@ -275,16 +249,34 @@ class _CustomerItems extends StatelessWidget {
               ],
             ),
           if (items.isNotEmpty) ...[
-            if (customer.isNotEmpty) const SizedBox(height: 6),
+            if (customer.isNotEmpty) const SizedBox(height: 8),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.inventory_2_rounded, size: 15, color: cs.primary),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text(items,
-                      style: TextStyle(
-                          fontSize: 12.5, color: cs.onSurfaceVariant)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Items (${items.length})',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: cs.onSurfaceVariant)),
+                      const SizedBox(height: 2),
+                      // One item per line — clearer than a run-on string.
+                      for (final line in items)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text('• $line',
+                              style: TextStyle(
+                                  fontSize: 12.5,
+                                  height: 1.3,
+                                  color: cs.onSurface)),
+                        ),
+                    ],
+                  ),
                 ),
               ],
             ),

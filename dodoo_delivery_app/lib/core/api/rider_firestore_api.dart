@@ -159,7 +159,12 @@ class RiderFirestoreApi {
     };
     final col = colMap[docType]!;
 
-    await _fs.updateRider({col: url, 'is_document_verified': false});
+    // Re-uploading a doc resets it to "pending" so the admin re-verifies it.
+    await _fs.updateRider({
+      col: url,
+      'is_document_verified': false,
+      'document_status.$docType': 'pending',
+    });
     final rider = await _fs.getRider() ?? {};
     return Map<String, dynamic>.from(
         {...rider, col: url, 'is_document_verified': false});
@@ -177,6 +182,8 @@ class RiderFirestoreApi {
       final uid = FirebaseAuth.instance.currentUser!.uid;
       updates['profile_picture_url'] = await CloudinaryService.instance
           .uploadFile(photo.path, folder: 'profile_pictures', publicId: uid);
+      // New photo → admin re-verifies it.
+      updates['document_status.profile'] = 'pending';
     }
 
     await _fs.updateRider(updates);

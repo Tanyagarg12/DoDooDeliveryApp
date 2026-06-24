@@ -44,17 +44,26 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
   Future<CheckPhoneResult> checkPhone(String phone) async {
     await _ensureAnonSession();
     final id = _digits(phone);
-    final rider = await _fs.getRider(id);
-    if (rider == null) {
+    // This lookup is only an optimization (it decides the OTP-screen hint).
+    // The OTP itself comes from the DoDoo HTTPS API, so a Firestore hiccup
+    // (e.g. cloud_firestore/unavailable on a flaky network) must NOT block
+    // sending the OTP. On failure we treat the number as unknown; verifyOtp
+    // re-resolves existing-vs-new after the code is entered.
+    try {
+      final rider = await _fs.getRider(id);
+      if (rider == null) {
+        return CheckPhoneResult(exists: false, phone: phone);
+      }
+      return CheckPhoneResult(
+        exists: true,
+        phone: phone,
+        accountStatus: AccountStatus.fromString(
+            rider['account_status']?.toString()),
+        riderId: rider['id']?.toString(),
+      );
+    } catch (_) {
       return CheckPhoneResult(exists: false, phone: phone);
     }
-    return CheckPhoneResult(
-      exists: true,
-      phone: phone,
-      accountStatus: AccountStatus.fromString(
-          rider['account_status']?.toString()),
-      riderId: rider['id']?.toString(),
-    );
   }
 
   @override
@@ -83,7 +92,15 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
     _pendingOtp = null;
 
     // Existing rider → return them. New number → null (caller routes to register).
-    final existing = await _fs.getRider(id);
+    // A thrown error here means Firestore was unreachable (NOT "new rider"),
+    // so surface a clear network message instead of mis-routing to register.
+    Map<String, dynamic>? existing;
+    try {
+      existing = await _fs.getRider(id);
+    } catch (_) {
+      throw const ServerException(
+          'Could not reach the server. Check your internet and try again.');
+    }
     if (existing == null) return null;
     final rider = RiderModel.fromJson(existing);
     await _storage.saveRiderJson(rider.toJsonString());
@@ -182,6 +199,35 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
       if (json == null) return null;
       return RiderModel.fromJsonString(json);
     }
+  }
+
+  @override
+  Future<RiderEntity?> restoreSession() async {
+    final json = await _storage.getRiderJson();
+    if (json == null || json.isEmpty) return null;
+
+    RiderModel cached;
+    try {
+      cached = RiderModel.fromJsonString(json);
+    } catch (_) {
+      return null; // corrupt cache → treat as logged out
+    }
+
+    final id = cached.id.isNotEmpty ? cached.id : _digits(cached.phone);
+    if (id.isEmpty) return null;
+    RiderSession.riderId = id;
+    await _ensureAnonSession();
+
+    // Refresh from Firestore so approval/status changes show after a restart.
+    try {
+      final fresh = await _fs.getRider(id);
+      if (fresh != null) {
+        final rider = RiderModel.fromJson(fresh);
+        await _storage.saveRiderJson(rider.toJsonString());
+        return rider;
+      }
+    } catch (_) {/* offline — fall back to the cached rider below */}
+    return cached;
   }
 
   @override

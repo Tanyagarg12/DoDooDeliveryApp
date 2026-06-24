@@ -5,6 +5,7 @@ import '../../../../core/constants/order_status.dart';
 import '../../../../core/firebase/admin_firestore_service.dart';
 import '../../../../core/widgets/support_modal.dart';
 import '../../../orders_api/data/dodoo_order_api.dart';
+import 'admin_live_map_screen.dart';
 
 /// Admin order detail — full order info plus management actions:
 /// cancel, reassign to a specific rider, or re-broadcast to all riders.
@@ -40,17 +41,68 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final order = await _admin.getOrder(widget.orderId);
+      var order = await _admin.getOrder(widget.orderId);
       _riders = await _admin.ridersForPicker();
       _riderById
         ..clear()
         ..addEntries(_riders.map((r) => MapEntry(r['id'].toString(), r)));
+      // Orders imported sparsely (active/finished backfill) have no addresses
+      // or items. Fetch the full detail from DoDoo by order id, fill it in, and
+      // cache it back to Firestore so the list shows it too next time.
+      if (order != null && _needsDetail(order)) {
+        order = await _fillDetail(order);
+      }
       _order = order;
       _error = _order == null ? 'Order not found' : null;
     } catch (e) {
       _error = e.toString();
     }
     if (mounted) setState(() => _loading = false);
+  }
+
+  /// True when the order is missing the detail fields (sparse import).
+  bool _needsDetail(Map<String, dynamic> o) {
+    final hasTo = (o['to_address']?.toString() ?? '').trim().isNotEmpty;
+    final hasFrom = (o['from_address']?.toString() ?? '').trim().isNotEmpty;
+    final cart = o['cart_items'];
+    final hasItems = (cart is List && cart.isNotEmpty) ||
+        (o['items_description']?.toString() ?? '').trim().isNotEmpty;
+    return !hasTo && !hasFrom && !hasItems;
+  }
+
+  /// Fetches the full order detail from DoDoo by order id and merges the detail
+  /// fields (addresses, customer, items, pricing) — without touching our own
+  /// status/assignment — then persists the enrichment back to Firestore.
+  Future<Map<String, dynamic>> _fillDetail(Map<String, dynamic> order) async {
+    final orderNumber = order['order_number']?.toString() ?? '';
+    if (orderNumber.isEmpty) return order;
+    try {
+      final detail = await _dodoo.getOrderDetail(
+        orderNumber,
+        orderType: order['order_type']?.toString(),
+      );
+      if (detail == null || detail.isNoData) return order;
+
+      final full = detail.toSupabaseOrder(
+          cityCodeOverride: order['city_code']?.toString());
+      // Never overwrite our own workflow fields with the imported snapshot.
+      full
+        ..remove('status')
+        ..remove('status_updated_at')
+        ..remove('order_number')
+        ..remove('city_code');
+      // Don't clobber an earning we already set with a 0/empty one.
+      if ((full['total_earning'] == null ||
+              (full['total_earning'] as num?) == 0) &&
+          order['total_earning'] != null) {
+        full.remove('total_earning');
+      }
+
+      await _admin.updateOrder(widget.orderId, full);
+      return {...order, ...full};
+    } catch (_) {
+      return order; // best-effort — keep the sparse order if detail fails
+    }
   }
 
   String _riderName(String? id) {
@@ -242,6 +294,11 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
           const SizedBox(height: 10),
           _line(Icons.location_on_rounded, const Color(0xFFDC2626), 'Drop',
               o['to_address']?.toString() ?? '—'),
+          if ((o['landmark_address']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _line(Icons.push_pin_rounded, const Color(0xFF7C3AED),
+                'Address 2 / Landmark', o['landmark_address'].toString()),
+          ],
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerLeft,
@@ -304,9 +361,61 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
 
         _card('Assignment', [
           _kv('Assigned rider', _riderName(assignedId)),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
+          // What the rider earns for this delivery.
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: _teal.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _teal.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.account_balance_wallet_rounded,
+                    size: 18, color: Color(0xFF6B6E00)),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('Rider earns',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700)),
+                ),
+                Text(
+                  '₹${money(o['total_earning'] ?? o['minimum_fare'] ?? 0)}',
+                  style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF6B6E00)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
           _kv('Updated',
               _fmt(o['status_updated_at']) ?? _fmt(o['created_at']) ?? '—'),
+          if (assignedId != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        AdminLiveMapScreen(focusRiderId: assignedId),
+                  ),
+                ),
+                icon: const Icon(Icons.my_location_rounded, size: 18),
+                label: const Text('Track rider on map'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _teal,
+                  side: const BorderSide(color: _teal),
+                  minimumSize: const Size.fromHeight(46),
+                ),
+              ),
+            ),
+          ],
         ]),
         const SizedBox(height: 20),
 
@@ -624,6 +733,7 @@ class _ItemsCard extends StatelessWidget {
         order['delivery_charge'] != null ||
         order['tax'] != null ||
         order['wallet_amount'] != null ||
+        order['promotion'] != null ||
         order['order_total'] != null;
 
     return Container(
@@ -644,7 +754,15 @@ class _ItemsCard extends StatelessWidget {
           if (cart.isEmpty && desc.isEmpty)
             const Text('—', style: TextStyle(fontSize: 13))
           else if (cart.isEmpty)
-            Text(desc, style: const TextStyle(fontSize: 13))
+            // No structured cart — split the summary so each item is on its
+            // own line.
+            ...desc.split(' • ').where((s) => s.trim().isNotEmpty).map(
+                  (line) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text('•  ${line.trim()}',
+                        style: const TextStyle(fontSize: 13)),
+                  ),
+                )
           else
             ...cart.map((raw) {
               final i = Map<String, dynamic>.from(raw as Map);
@@ -674,6 +792,7 @@ class _ItemsCard extends StatelessWidget {
             _priceRow('Service Charges', order['delivery_charge']),
             _priceRow('Convenience Fee', order['tax']),
             _priceRow('Wallet Amount', order['wallet_amount']),
+            _priceRow('Promotion Applied', order['promotion']),
             _priceRow('Order Total', order['order_total'], bold: true),
           ],
         ],

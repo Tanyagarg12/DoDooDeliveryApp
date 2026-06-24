@@ -14,6 +14,7 @@ class DodooOrder {
     this.contactNo,
     this.pickAddress,
     this.dropAddress,
+    this.landmarkDropAddress,
     this.pickLat,
     this.pickLng,
     this.dropLat,
@@ -44,6 +45,7 @@ class DodooOrder {
   final String? contactNo;
   final String? pickAddress;
   final String? dropAddress;
+  final String? landmarkDropAddress;
   final double? pickLat;
   final double? pickLng;
   final double? dropLat;
@@ -92,6 +94,15 @@ class DodooOrder {
     return totPrice ?? price ?? deliveryCharge;
   }
 
+  /// Promotion/discount applied = (items + delivery + tax) − wallet − total.
+  /// Returns 0 when there's no discount (so the row still shows "₹0").
+  double? get promotion {
+    if (price == null || totPrice == null) return null;
+    final gross = price! + (deliveryCharge ?? 0) + (tax ?? 0);
+    final p = gross - (walletAmount ?? 0) - totPrice!;
+    return p > 0.5 ? double.parse(p.toStringAsFixed(2)) : 0;
+  }
+
   /// Maps DoDoo's status word to our internal order status, so an imported
   /// order shows its real state (not always "pending").
   String get internalStatus {
@@ -105,9 +116,11 @@ class DodooOrder {
         return 'picked_up';
       case 'ongoing':
         return 'in_transit';
+      case 'deliver': // GetAllTypeOrdersByStore status word
       case 'delivered':
       case 'completed':
         return 'completed';
+      case 'cancel': // GetAllTypeOrdersByStore status word
       case 'cancelled':
       case 'canceled':
         return 'cancelled';
@@ -140,6 +153,7 @@ class DodooOrder {
       contactNo: j['ContactNo']?.toString(),
       pickAddress: j['PickpAddress']?.toString(),
       dropAddress: j['DropAddress']?.toString(),
+      landmarkDropAddress: j['LandMarkDropAddress']?.toString(),
       pickLat: _d(j['PickLattitude'] ?? j['Lattitude']),
       pickLng: _d(j['PickLongitude'] ?? j['Longitude']),
       dropLat: _d(j['DropLattitude']),
@@ -197,12 +211,17 @@ class DodooOrder {
     return {
       'order_number': orderId,
       'status': internalStatus,
-      'city_code': cityCodeOverride ?? cityCode,
+      // Prefer the order's OWN city code; fall back to the city we synced for.
+      'city_code': (cityCode != null && cityCode!.isNotEmpty)
+          ? cityCode
+          : cityCodeOverride,
       'order_type': orderType ?? type.name,
       'from_address': pickupDisplay,
       'from_latitude': pickLat,
       'from_longitude': pickLng,
       'to_address': dropAddress ?? '',
+      if ((landmarkDropAddress ?? '').isNotEmpty)
+        'landmark_address': landmarkDropAddress,
       'to_latitude': dropLat,
       'to_longitude': dropLng,
       if (dist != null) 'distance_in_km': double.parse(dist.toStringAsFixed(2)),
@@ -216,6 +235,7 @@ class DodooOrder {
       if (deliveryCharge != null) 'delivery_charge': deliveryCharge,
       if (tax != null) 'tax': tax,
       if (walletAmount != null) 'wallet_amount': walletAmount,
+      if (promotion != null) 'promotion': promotion,
       'customer_name': name ?? '',
       'customer_phone': contactNo ?? '',
       'store_name': storeId ?? storeName ?? '',
@@ -223,9 +243,17 @@ class DodooOrder {
       'cart_items': cartItems,
       if ((validationCode ?? '').isNotEmpty) 'validation_code': validationCode,
       if ((paymentMode ?? '').isNotEmpty) 'payment_mode': paymentMode,
+      // Use the real DoDoo order time as created_at so the list sorts by when
+      // the order was actually placed (latest on top) — keeps old backfilled
+      // history at the bottom instead of jumping to the top on each sync.
+      if (_placedAt() != null) 'created_at': _placedAt(),
       'status_updated_at': DateTime.now().toIso8601String(),
     };
   }
+
+  /// Parses the DoDoo OrderDate ("2021-02-22 10:11:24") to a DateTime.
+  DateTime? _placedAt() =>
+      orderDate == null ? null : DateTime.tryParse(orderDate!);
 
   double? _distanceKm() {
     if (pickLat == null || pickLng == null || dropLat == null || dropLng == null) {

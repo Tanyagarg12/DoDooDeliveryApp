@@ -9,6 +9,10 @@ abstract class AdminRepository {
   Future<String?> getSavedToken();
   Future<void> clearToken();
 
+  /// Re-establishes the backend session (anonymous Firebase auth) when
+  /// restoring a saved admin login on app start.
+  Future<void> ensureSession();
+
   Future<DashboardStats> getStats(String token);
 
   Future<RiderListResult> getRiders(

@@ -102,6 +102,7 @@ class FirestoreService {
 
     // Build pending offers — fetch order for each offer, filter by pending
     final pendingOffers = <Map<String, dynamic>>[];
+    final seenOrderIds = <String>{};
     await Future.wait(offersSnap.docs.map((offerDoc) async {
       final offerData = _toMap(offerDoc);
       final orderId = offerData['order_id'] as String?;
@@ -110,8 +111,47 @@ class FirestoreService {
       if (!orderDoc.exists) return;
       final orderData = _toMap(orderDoc);
       if (orderData['status'] != 'pending') return;
+      seenOrderIds.add(orderId);
       pendingOffers.add({...offerData, 'order': orderData});
     }));
+
+    // Also surface ANY unassigned pending order — even one that was never
+    // broadcast to this rider (e.g. imported before they registered). This is
+    // why a pending/"unassigned" order in the admin must still appear here.
+    // Orders this rider already rejected are excluded.
+    try {
+      final results2 = await Future.wait([
+        _orders.where('status', isEqualTo: 'pending').limit(50).get(),
+        _offers
+            .where('rider_id', isEqualTo: uid)
+            .where('is_rejected', isEqualTo: true)
+            .get(),
+      ]);
+      final openSnap = results2[0] as QuerySnapshot;
+      final rejectedSnap = results2[1] as QuerySnapshot;
+      final rejectedOrderIds = rejectedSnap.docs
+          .map((d) => _toMap(d)['order_id']?.toString())
+          .whereType<String>()
+          .toSet();
+
+      for (final doc in openSnap.docs) {
+        final order = _toMap(doc);
+        final oid = order['id'].toString();
+        if (seenOrderIds.contains(oid)) continue; // already have an offer
+        if (rejectedOrderIds.contains(oid)) continue; // rider passed on it
+        final assigned = order['assigned_rider_id']?.toString() ?? '';
+        if (assigned.isNotEmpty) continue; // already taken
+        seenOrderIds.add(oid);
+        pendingOffers.add({
+          'id': 'open_$oid',
+          'order_id': oid,
+          'rider_id': uid,
+          'is_accepted': false,
+          'is_rejected': false,
+          'order': order,
+        });
+      }
+    } catch (_) {/* best-effort — offer-based list still works */}
 
     // Earnings summary
     final now = DateTime.now();

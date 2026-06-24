@@ -218,7 +218,7 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
                               fontSize: 16, fontWeight: FontWeight.w600),
                           decoration: const InputDecoration(
                             labelText: 'Mobile Number',
-                            hintText: '9876543210',
+                            hintText: 'Enter your 10-digit number',
                             prefixIcon: Padding(
                               padding: EdgeInsets.fromLTRB(14, 14, 8, 14),
                               child: Text('🇮🇳 +91',

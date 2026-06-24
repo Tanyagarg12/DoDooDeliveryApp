@@ -17,6 +17,9 @@ class AdminFirestoreDataSource {
   static const _defaultPassword = 'dodoo@123';
   static const _sessionToken = 'FIREBASE_ADMIN_SESSION';
 
+  /// Public hook to re-establish the backend session on app-start restore.
+  Future<void> ensureSession() => _ensureAnonSession();
+
   /// Ensures the anonymous Firebase session needed for Firestore rules.
   Future<void> _ensureAnonSession() async {
     if (FirebaseAuth.instance.currentUser == null) {

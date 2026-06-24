@@ -37,8 +37,27 @@ final adminRiderDetailControllerProvider = StateNotifierProvider.family<
 class AdminAuthController extends StateNotifier<AdminAuthState> {
   final AdminRepository _repo;
 
-  // No auto session-restore: the admin must log in explicitly each time.
   AdminAuthController(this._repo) : super(const AdminAuthInitial());
+
+  /// Restores a saved admin login on app start (so the admin stays logged in
+  /// until they explicitly log out). Returns true if a session was restored.
+  Future<bool> restoreSession() async {
+    final token = await _repo.getSavedToken();
+    if (token == null || token.isEmpty) return false;
+    try {
+      await _repo.ensureSession(); // re-establish Firebase anon session
+    } catch (_) {}
+    state = AdminAuthenticated(
+      admin: const AdminUser(
+        id: 'admin',
+        username: 'admin',
+        name: 'DoDoo Admin',
+        email: 'Teamdodoo@gmail.com',
+      ),
+      accessToken: token,
+    );
+    return true;
+  }
 
   Future<void> login(String username, String password) async {
     state = const AdminAuthLoading();

@@ -202,7 +202,7 @@ class _RiderRegistrationScreenState
                     Expanded(
                       child: CustomTextField(
                         label: 'First Name *',
-                        hint: 'Ravi',
+                        hint: 'Enter first name',
                         controller: _firstNameCtrl,
                         validator: Validators.fullName,
                         textInputAction: TextInputAction.next,
@@ -212,7 +212,7 @@ class _RiderRegistrationScreenState
                     Expanded(
                       child: CustomTextField(
                         label: 'Last Name',
-                        hint: 'Kumar',
+                        hint: 'Enter last name',
                         controller: _lastNameCtrl,
                         textInputAction: TextInputAction.next,
                       ),
@@ -224,7 +224,7 @@ class _RiderRegistrationScreenState
                 const SizedBox(height: 14),
                 CustomTextField(
                   label: 'Email Address (optional)',
-                  hint: 'ravi@example.com',
+                  hint: 'Enter your email',
                   controller: _emailCtrl,
                   keyboardType: TextInputType.emailAddress,
                   textInputAction: TextInputAction.next,
@@ -232,7 +232,7 @@ class _RiderRegistrationScreenState
                 const SizedBox(height: 14),
                 CustomTextField(
                   label: 'Full Address *',
-                  hint: '123, MG Road, Bengaluru, Karnataka 560001',
+                  hint: 'Enter your full address',
                   controller: _addressCtrl,
                   validator: (v) => Validators.required(v, field: 'Address'),
                   maxLines: 3,
@@ -249,7 +249,7 @@ class _RiderRegistrationScreenState
                 const SizedBox(height: 12),
                 CustomTextField(
                   label: 'Aadhaar Number',
-                  hint: '1234 5678 9012',
+                  hint: 'Enter 12-digit Aadhaar number',
                   controller: _aadhaarCtrl,
                   validator: Validators.aadhaarFormat,
                   keyboardType: TextInputType.number,
@@ -284,7 +284,7 @@ class _RiderRegistrationScreenState
                 const SizedBox(height: 12),
                 CustomTextField(
                   label: 'Driving License Number',
-                  hint: 'KA01 20220012345',
+                  hint: 'Enter license number',
                   controller: _licenseCtrl,
                   validator: Validators.drivingLicenseFormat,
                   keyboardType: TextInputType.text,
