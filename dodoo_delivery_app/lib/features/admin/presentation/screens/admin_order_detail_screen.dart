@@ -46,10 +46,12 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
       _riderById
         ..clear()
         ..addEntries(_riders.map((r) => MapEntry(r['id'].toString(), r)));
-      // Orders imported sparsely (active/finished backfill) have no addresses
-      // or items. Fetch the full detail from DoDoo by order id, fill it in, and
-      // cache it back to Firestore so the list shows it too next time.
-      if (order != null && _needsDetail(order)) {
+      // Fetch full detail from DoDoo by order id when the order is missing its
+      // details (sparse import) OR its real order date (older imports), then
+      // fill it in and cache it back to Firestore for the list too.
+      final missingOrderDate =
+          (order?['order_date']?.toString() ?? '').trim().isEmpty;
+      if (order != null && (_needsDetail(order) || missingOrderDate)) {
         order = await _fillDetail(order);
       }
       _order = order;
@@ -360,9 +362,7 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
         const SizedBox(height: 12),
 
         _card('Assignment', [
-          _kv('Assigned rider', _riderName(assignedId)),
-          const SizedBox(height: 10),
-          // What the rider earns for this delivery.
+          // Rider earning + who earns it (or "Unassigned" when no rider yet).
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -373,13 +373,33 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.account_balance_wallet_rounded,
-                    size: 18, color: Color(0xFF6B6E00)),
+                Icon(
+                    assignedId != null
+                        ? Icons.account_balance_wallet_rounded
+                        : Icons.person_off_rounded,
+                    size: 18,
+                    color: const Color(0xFF6B6E00)),
                 const SizedBox(width: 8),
-                const Expanded(
-                  child: Text('Rider earns',
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        assignedId != null
+                            ? '${_riderName(assignedId)} earns'
+                            : 'Unassigned',
+                        style: const TextStyle(
+                            fontSize: 13.5, fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        assignedId != null
+                            ? 'Rider earning'
+                            : 'No rider assigned yet',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
                 ),
                 Text(
                   '₹${money(o['total_earning'] ?? o['minimum_fare'] ?? 0)}',
@@ -392,8 +412,12 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
             ),
           ),
           const SizedBox(height: 10),
-          _kv('Updated',
-              _fmt(o['status_updated_at']) ?? _fmt(o['created_at']) ?? '—'),
+          _kv('Order total', '₹${money(o['order_total'] ?? 0)}'),
+          const SizedBox(height: 10),
+          _kv('Order date',
+              _fmt(o['order_date']) ?? _fmt(o['created_at']) ?? '—'),
+          const SizedBox(height: 10),
+          _kv('Updated', _fmt(o['status_updated_at']) ?? '—'),
           if (assignedId != null) ...[
             const SizedBox(height: 12),
             SizedBox(

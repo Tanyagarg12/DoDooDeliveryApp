@@ -2,7 +2,7 @@ name: dodoo_delivery_app
 description: "DoDoo Rider — delivery partner app with OTP auth and order management."
 publish_to: 'none'
 
-version: 1.1.0+2
+version: 1.2.1+4
 
 environment:
   sdk: ^3.12.0

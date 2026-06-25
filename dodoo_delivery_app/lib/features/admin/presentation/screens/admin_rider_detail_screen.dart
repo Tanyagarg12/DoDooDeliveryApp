@@ -76,13 +76,27 @@ class _AdminRiderDetailScreenState
     } catch (_) {/* best-effort */}
   }
 
+  /// True when every document the admin has acted on is verified (and none are
+  /// pending/rejected) — drives the "Verified / Docs Verified" summary rows.
+  bool get _docsVerified {
+    final vals = _docStatus.values.map((v) => v.toString()).toList();
+    return vals.isNotEmpty &&
+        !vals.contains('pending') &&
+        !vals.contains('rejected');
+  }
+
   /// Verify / reject a single document. Optimistic — updates the chip instantly
   /// (so the buttons never grey out / "disappear") and writes in the background.
+  /// Also sets the rider's is_document_verified / is_verified flags so the
+  /// summary rows reflect the verification.
   Future<void> _setDocStatus(String docType, String status) async {
     setState(() => _docStatus = {..._docStatus, docType: status});
+    final verified = _docsVerified;
     try {
       await Db.riders.doc(widget.riderId).set({
         'document_status': {docType: status},
+        'is_document_verified': verified,
+        'is_verified': verified,
       }, SetOptions(merge: true));
     } catch (_) {/* keep the optimistic value */}
   }
@@ -225,7 +239,7 @@ class _AdminRiderDetailScreenState
                     onAction: (a) => _takeAction(context, rider, a),
                   ),
                   const SizedBox(height: 16),
-                  _InfoSection(rider: rider),
+                  _InfoSection(rider: rider, docsVerified: _docsVerified),
                   const SizedBox(height: 16),
                   RiderPerformanceSection(riderId: widget.riderId),
                   const SizedBox(height: 16),
@@ -630,7 +644,8 @@ class _ActionButton extends StatelessWidget {
 // ── Info section ──────────────────────────────────────────────────────────────
 
 class _InfoSection extends StatelessWidget {
-  const _InfoSection({required this.rider});
+  const _InfoSection({required this.rider, this.docsVerified = false});
+  final bool docsVerified;
   final AdminRider rider;
 
   @override
@@ -657,8 +672,9 @@ class _InfoSection extends StatelessWidget {
           _InfoRow('Rating', '${rider.rating.toStringAsFixed(1)} ★'),
           _InfoRow('Total Orders', '${rider.totalOrders}'),
           _InfoRow('Online Status', rider.currentStatus),
-          _InfoRow('Verified', rider.isVerified ? 'Yes' : 'No'),
-          _InfoRow('Docs Verified', rider.isDocumentVerified ? 'Yes' : 'No'),
+          _InfoRow('Verified', (docsVerified || rider.isVerified) ? 'Yes' : 'No'),
+          _InfoRow('Docs Verified',
+              (docsVerified || rider.isDocumentVerified) ? 'Yes' : 'No'),
           if (rider.aadhaarNumber?.isNotEmpty ?? false)
             _InfoRow('Aadhaar', rider.aadhaarNumber!),
           if (rider.drivingLicenseNumber?.isNotEmpty ?? false)

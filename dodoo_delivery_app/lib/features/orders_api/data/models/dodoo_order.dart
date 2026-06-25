@@ -247,6 +247,8 @@ class DodooOrder {
       // the order was actually placed (latest on top) — keeps old backfilled
       // history at the bottom instead of jumping to the top on each sync.
       if (_placedAt() != null) 'created_at': _placedAt(),
+      // The original DoDoo order date, shown on the order detail screen.
+      if ((orderDate ?? '').isNotEmpty) 'order_date': orderDate,
       'status_updated_at': DateTime.now().toIso8601String(),
     };
   }

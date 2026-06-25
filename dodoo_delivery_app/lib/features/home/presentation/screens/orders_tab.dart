@@ -34,6 +34,17 @@ List<Map<String, dynamic>> filterOffersByCity(
   }).toList();
 }
 
+/// Offers to show: filtered to the rider's selected/nearest city, but NEVER
+/// hides offers — if that city has none while offers exist elsewhere, show all.
+List<Map<String, dynamic>> visibleOffers(
+    List<Map<String, dynamic>> offers, String? cityCode) {
+  final filtered = filterOffersByCity(offers, cityCode);
+  if (filtered.isEmpty && offers.isNotEmpty) {
+    return List<Map<String, dynamic>>.from(offers);
+  }
+  return filtered;
+}
+
 class OrdersTab extends ConsumerStatefulWidget {
   const OrdersTab({super.key});
 
@@ -78,8 +89,7 @@ class _OrdersTabState extends ConsumerState<OrdersTab>
   Widget build(BuildContext context) {
     final state = ref.watch(riderDashboardProvider);
     final cityFilter = ref.watch(riderCityFilterProvider);
-    final visibleOffers =
-        filterOffersByCity(state.pendingOffers, cityFilter);
+    final visibleOffersList = visibleOffers(state.pendingOffers, cityFilter);
     final cs = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -171,9 +181,9 @@ class _OrdersTabState extends ConsumerState<OrdersTab>
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Text('Offers'),
-                        if (visibleOffers.isNotEmpty) ...[
+                        if (visibleOffersList.isNotEmpty) ...[
                           const SizedBox(width: 6),
-                          _CountBadge(visibleOffers.length,
+                          _CountBadge(visibleOffersList.length,
                               color: AppColors.busy),
                         ],
                       ],
@@ -250,7 +260,7 @@ class _OffersList extends ConsumerWidget {
         ref.read(riderDashboardProvider.notifier).refresh(showLoading: true);
     final busy = state.hasActiveOrder;
     final cityFilter = ref.watch(riderCityFilterProvider);
-    final offers = filterOffersByCity(state.pendingOffers, cityFilter);
+    final offers = visibleOffers(state.pendingOffers, cityFilter);
 
     // City picker sits above the list so the rider can pick where they want to
     // pick up requests from.
@@ -440,6 +450,7 @@ class _OfferCard extends ConsumerWidget {
                   iconColor: AppColors.busy,
                   label: 'Drop',
                   address: order['to_address']?.toString() ?? '—',
+                  landmark: order['landmark_address']?.toString(),
                 ),
                 const SizedBox(height: 12),
 
@@ -533,11 +544,13 @@ class _AddressRow extends StatelessWidget {
     required this.iconColor,
     required this.label,
     required this.address,
+    this.landmark,
   });
   final IconData icon;
   final Color iconColor;
   final String label;
   final String address;
+  final String? landmark;
 
   @override
   Widget build(BuildContext context) {
@@ -566,6 +579,17 @@ class _AddressRow extends StatelessWidget {
                       color: cs.onSurface),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis),
+              if ((landmark ?? '').trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text('Landmark: ${landmark!.trim()}',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontStyle: FontStyle.italic,
+                          color: cs.onSurfaceVariant),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                ),
             ],
           ),
         ),

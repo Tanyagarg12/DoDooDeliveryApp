@@ -51,6 +51,9 @@ class RiderDashboardState {
   String get phone => rider['phone']?.toString() ?? '';
   String get email => rider['email']?.toString() ?? '';
   String get address => rider['address']?.toString() ?? '';
+
+  /// The rider's GPay / PhonePe (UPI) number for payouts.
+  String get upiNumber => rider['upi_number']?.toString() ?? '';
   String get profilePictureUrl =>
       rider['profile_picture_url']?.toString() ?? '';
   String get accountStatus =>

@@ -305,12 +305,8 @@ class RiderDashboardController
       // track this rider on the live map (navigation replaces in-app tracking
       // for the rider themselves).
       LocationTrackingService.instance.start();
-      NotificationService.instance
-          .showOrderAssigned(
-            title: 'Order assigned',
-            body: 'You accepted order #$orderId. Head to pickup!',
-          )
-          .ignore();
+      // (No "order assigned" notification — the rider just tapped Accept, and
+      // it showed an internal id which isn't useful.)
       if (!mounted) return false;
       await refresh();
       return true;
@@ -342,6 +338,15 @@ class RiderDashboardController
     state = state.copyWith(isLoading: true);
     try {
       await _api.updateOrderStatus(orderId, nextStatus);
+      // Once delivered/cancelled the order is no longer active — remove it
+      // immediately so the "status locked while you have an active delivery"
+      // message clears right away (don't wait for the next refresh).
+      if (nextStatus == 'completed' || nextStatus == 'cancelled') {
+        final remaining = state.activeOrders
+            .where((o) => o['id']?.toString() != orderId)
+            .toList();
+        state = state.copyWith(activeOrders: remaining);
+      }
       if (nextStatus == 'completed') {
         final earning =
             order['total_earning'] ?? order['minimum_fare'] ?? '';
@@ -350,7 +355,7 @@ class RiderDashboardController
               title: 'Payment credited',
               body: earning == ''
                   ? 'Delivery completed and added to your wallet.'
-                  : '₹$earning credited for order #$orderId.',
+                  : '₹$earning credited to your wallet.',
             )
             .ignore();
       }

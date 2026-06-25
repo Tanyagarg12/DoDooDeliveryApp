@@ -76,6 +76,25 @@ class AdminFirestoreService {
     return found;
   }
 
+  /// Existing orders keyed by order_number → {id, status, assigned_rider_id}.
+  /// Used to re-sync each order's status from DoDoo on every sync.
+  Future<Map<String, Map<String, dynamic>>> existingOrdersByNumber(
+      List<String> orderNumbers) async {
+    final out = <String, Map<String, dynamic>>{};
+    for (var i = 0; i < orderNumbers.length; i += 10) {
+      final end = (i + 10) > orderNumbers.length ? orderNumbers.length : i + 10;
+      final chunk = orderNumbers.sublist(i, end);
+      if (chunk.isEmpty) continue;
+      final snap = await Db.orders.where('order_number', whereIn: chunk).get();
+      for (final d in snap.docs) {
+        final m = _map(d);
+        final on = m['order_number']?.toString();
+        if (on != null) out[on] = m;
+      }
+    }
+    return out;
+  }
+
   /// Pending, unassigned orders whose status_updated_at is older than [cutoff].
   Future<List<Map<String, dynamic>>> staleUnpickedOrders(DateTime cutoff) async {
     final snap = await Db.orders.where('status', isEqualTo: 'pending').get();

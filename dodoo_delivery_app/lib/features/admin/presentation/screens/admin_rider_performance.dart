@@ -171,6 +171,35 @@ class _RiderPerformanceSectionState extends State<RiderPerformanceSection> {
               )
             else
               ..._orders.take(20).map(_orderRow),
+
+            // Dedicated list of every order this rider has DELIVERED.
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                const Icon(Icons.check_circle_rounded,
+                    size: 18, color: Color(0xFF059669)),
+                const SizedBox(width: 8),
+                Text('Delivered Orders ($_completed)',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w800, fontSize: 15)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Builder(builder: (_) {
+              final delivered = _orders
+                  .where((o) => o['status']?.toString() == 'completed')
+                  .toList();
+              if (delivered.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('No delivered orders yet.',
+                      style: TextStyle(color: Colors.black54)),
+                );
+              }
+              return Column(
+                children: delivered.take(50).map(_orderRow).toList(),
+              );
+            }),
           ],
         ],
       ),

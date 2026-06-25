@@ -288,30 +288,43 @@ class FirestoreService {
     final uid = currentUid;
     final now = DateTime.now();
     final start = switch (filter) {
-      'today' => Timestamp.fromDate(DateTime(now.year, now.month, now.day)),
-      'month' => Timestamp.fromDate(DateTime(now.year, now.month, 1)),
-      _ => Timestamp.fromDate(now.subtract(const Duration(days: 7))),
+      'today' => DateTime(now.year, now.month, now.day),
+      'month' => DateTime(now.year, now.month, 1),
+      _ => now.subtract(const Duration(days: 7)),
     };
 
+    // Fetch ALL of this rider's orders with a single-field query (no composite
+    // index needed), then filter/sort in Dart. This reliably shows every order
+    // the rider handled, and the time window is applied by the COMPLETION date
+    // (when it was delivered/cancelled) — not the order's placed date — so an
+    // order delivered today shows under "Today" even if it was placed earlier.
     final results = await Future.wait([
-      _orders
-          .where('assigned_rider_id', isEqualTo: uid)
-          .where('status', whereIn: ['completed', 'cancelled'])
-          .where('created_at', isGreaterThanOrEqualTo: start)
-          .orderBy('created_at', descending: true)
-          .get(),
+      _orders.where('assigned_rider_id', isEqualTo: uid).get(),
       _offers
           .where('rider_id', isEqualTo: uid)
           .where('is_rejected', isEqualTo: true)
-          .where('notified_at', isGreaterThanOrEqualTo: start)
-          .orderBy('notified_at', descending: true)
           .get(),
     ]);
 
-    final completedSnap = results[0] as QuerySnapshot;
+    final ordersSnap = results[0] as QuerySnapshot;
     final rejectedSnap = results[1] as QuerySnapshot;
 
-    final accepted = completedSnap.docs.map(_toMap).toList();
+    DateTime? when(Map<String, dynamic> o) =>
+        _parseDate(o['completed_at']) ??
+        _parseDate(o['status_updated_at']) ??
+        _parseDate(o['created_at']);
+
+    final accepted = ordersSnap.docs
+        .map(_toMap)
+        .where((o) {
+          final s = o['status']?.toString();
+          if (s != 'completed' && s != 'cancelled') return false;
+          final w = when(o);
+          return w != null && !w.isBefore(start);
+        })
+        .toList()
+      ..sort((a, b) => (when(b) ?? DateTime(0)).compareTo(when(a) ?? DateTime(0)));
+
     double totalEarnings = 0;
     int totalCompleted = 0;
     for (final o in accepted) {
@@ -321,10 +334,12 @@ class FirestoreService {
       }
     }
 
-    // Build rejected list with embedded order data
+    // Build rejected list with embedded order data (within the time window).
     final rejected = <Map<String, dynamic>>[];
     await Future.wait(rejectedSnap.docs.map((offerDoc) async {
       final offerData = _toMap(offerDoc);
+      final notifiedAt = _parseDate(offerData['notified_at']);
+      if (notifiedAt != null && notifiedAt.isBefore(start)) return;
       final orderId = offerData['order_id'] as String?;
       if (orderId == null) return;
       final orderDoc = await _orders.doc(orderId).get();

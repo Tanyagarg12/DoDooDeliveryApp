@@ -25,6 +25,7 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
   final _lastNameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
+  final _upiCtrl = TextEditingController();
   XFile? _pickedPhoto;
   bool _editPersonal = false;
   bool _savingPersonal = false;
@@ -45,6 +46,7 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
     _lastNameCtrl.text = s.lastName;
     _emailCtrl.text = s.email;
     _addressCtrl.text = s.address;
+    _upiCtrl.text = s.upiNumber;
   }
 
   @override
@@ -53,6 +55,7 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
     _lastNameCtrl.dispose();
     _emailCtrl.dispose();
     _addressCtrl.dispose();
+    _upiCtrl.dispose();
     super.dispose();
   }
 
@@ -165,6 +168,13 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
                       readOnly: !_editPersonal,
                       maxLines: 2,
                     ),
+                    _ProfileField(
+                      ctrl: _upiCtrl,
+                      label: 'GPay / PhonePe number',
+                      icon: Icons.account_balance_wallet_rounded,
+                      readOnly: !_editPersonal,
+                      keyboardType: TextInputType.phone,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -204,7 +214,7 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
                     _SettingsTile(
                       icon: Icons.info_outline_rounded,
                       title: 'App Version',
-                      trailing: Text('v1.1.0',
+                      trailing: Text('v1.2.1',
                           style: TextStyle(
                               color: cs.onSurfaceVariant, fontSize: 13)),
                     ),
@@ -253,6 +263,7 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
         'last_name': _lastNameCtrl.text.trim(),
         'email': _emailCtrl.text.trim(),
         'address': _addressCtrl.text.trim(),
+        'upi_number': _upiCtrl.text.trim(),
       },
       photo: _pickedPhoto,
     );
@@ -691,6 +702,16 @@ class _DocumentsCard extends StatelessWidget {
   final VoidCallback onReplaceAadharBack;
   final VoidCallback onReplaceLicense;
 
+  /// Effective per-document status: once the admin has marked the rider's docs
+  /// verified (is_document_verified), show each as Verified — unless that
+  /// specific doc was rejected (then it still needs a re-upload).
+  String _effStatus(String key) {
+    final raw = state.docStatus(key);
+    if (raw == 'rejected') return 'rejected';
+    if (state.isDocumentVerified) return 'verified';
+    return raw;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -770,7 +791,7 @@ class _DocumentsCard extends StatelessWidget {
             label: 'Aadhaar Card — Front',
             icon: Icons.credit_card_outlined,
             imageUrl: state.aadhaarFrontUrl,
-            status: state.docStatus('aadhar_front'),
+            status: _effStatus('aadhar_front'),
             uploading: uploadingAadharFront,
             onReplace: onReplaceAadharFront,
           ),
@@ -778,7 +799,7 @@ class _DocumentsCard extends StatelessWidget {
             label: 'Aadhaar Card — Back',
             icon: Icons.credit_card_outlined,
             imageUrl: state.aadhaarBackUrl,
-            status: state.docStatus('aadhar_back'),
+            status: _effStatus('aadhar_back'),
             uploading: uploadingAadharBack,
             onReplace: onReplaceAadharBack,
           ),
@@ -786,7 +807,7 @@ class _DocumentsCard extends StatelessWidget {
             label: 'Driving License',
             icon: Icons.drive_eta_outlined,
             imageUrl: state.licenseImageUrl,
-            status: state.docStatus('license'),
+            status: _effStatus('license'),
             uploading: uploadingLicense,
             onReplace: onReplaceLicense,
           ),

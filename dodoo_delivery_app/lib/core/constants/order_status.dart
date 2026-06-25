@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 
 /// The admin-facing order-status model.
 ///
-/// The app stores granular internal statuses on the Supabase `orders` row
-/// (`pending`, `accepted`, `picked_up`, `in_transit`, `reached`, `completed`,
-/// `cancelled`). The admin portal presents them as five business statuses:
+/// Internal statuses stored on the order (`pending`, `accepted`, `picked_up`,
+/// `in_transit`, `reached`, `completed`, `cancelled`) are presented in the admin
+/// as these sections:
 ///
-///   • Ongoing    – order is active, waiting for a rider (todo)
-///   • InProgress – order is assigned to a rider
-///   • Accepted   – order picked up by the rider
-///   • Completed  – order delivered
-///   • Cancelled  – order cancelled
+///   • Ongoing    (pending)                       – waiting for a rider
+///   • InProgress (picked_up/in_transit/reached)  – picked up / on the way
+///   • Accept     (accepted)                      – accepted by a rider
+///   • Completed  (completed = DoDoo "Deliver")   – delivered
+///   • Cancel     (cancelled)                     – cancelled
 ///
 /// This is the single source of truth for the label, description and colour of
 /// each status across the admin screens.
@@ -38,52 +38,56 @@ class AdminOrderStatus {
   /// Internal Supabase statuses that roll up into this business status.
   final List<String> internal;
 
+  // Admin sections / statuses the admin can set:
+  //   Ongoing → InProgress → Accept → Completed → Cancel
+  // ('Ongoing' is the open/waiting state; InProgress covers picked-up + on the
+  // way; Completed = DoDoo's Deliver.)
   static const ongoing = AdminOrderStatus._(
     'ongoing',
     'Ongoing',
-    'Order is active',
+    'Waiting for a rider',
     Color(0xFFD97706),
     ['pending'],
   );
   static const inProgress = AdminOrderStatus._(
     'inprogress',
     'InProgress',
-    'Order is assigned to rider',
-    Color(0xFF2563EB),
-    ['accepted'],
-  );
-  static const accepted = AdminOrderStatus._(
-    'accepted',
-    'Accepted',
-    'Order picked up by rider',
+    'Picked up / on the way',
     Color(0xFF7C3AED),
     ['picked_up', 'in_transit', 'reached'],
+  );
+  static const accept = AdminOrderStatus._(
+    'accept',
+    'Accept',
+    'Accepted by a rider',
+    Color(0xFF2563EB),
+    ['accepted'],
   );
   static const completed = AdminOrderStatus._(
     'completed',
     'Completed',
-    'Order delivered',
+    'Delivered',
     Color(0xFF059669),
     ['completed'],
   );
   static const cancelled = AdminOrderStatus._(
-    'cancelled',
+    'cancel',
+    'Cancel',
     'Cancelled',
-    'Order cancelled',
     Color(0xFFDC2626),
     ['cancelled'],
   );
 
-  /// All statuses, in workflow order.
+  /// All statuses, in the order the admin sees them.
   static const List<AdminOrderStatus> all = [
     ongoing,
     inProgress,
-    accepted,
+    accept,
     completed,
     cancelled,
   ];
 
-  /// Resolves an internal Supabase status to its admin business status.
+  /// Resolves an internal order status to its admin status.
   /// Unknown/empty statuses fall back to [ongoing].
   static AdminOrderStatus fromInternal(String? status) {
     for (final s in all) {

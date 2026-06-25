@@ -36,13 +36,22 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
   final _searchCtrl = TextEditingController();
   Timer? _watchTimer;
   StreamSubscription<List<Map<String, dynamic>>>? _ordersSub;
+  // Backfill detail (addresses/items) for sparsely-imported order cards.
+  final Set<String> _enriched = {};
+  bool _enriching = false;
+  // Throttle the heavy DoDoo fetch so it doesn't hammer the server / device.
+  DateTime? _lastSyncAt;
+  static const _syncCooldown = Duration(minutes: 5);
+  // Open order ids we've already alerted on, so the "new order" banner/sound
+  // fires only ONCE per order — never repeatedly on each sync.
+  final Set<String> _notifiedOrderIds = {};
 
   List<Map<String, dynamic>> _orders = [];
   final Map<String, String> _riderNames = {}; // rider_id → name
   bool _loading = true;
   bool _syncing = false;
   String? _error;
-  // An AdminOrderStatus.key (ongoing | inprogress | accepted | completed | cancelled)
+  // An AdminOrderStatus.key (ongoing | inprogress | accept | completed | cancel)
   String _filter = 'ongoing';
   String _query = '';
   String? _cityCode; // selected delivery city; null = All cities
@@ -62,13 +71,17 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
         _loading = false;
         _error = null;
       });
+      // NOTE: enrichment is NOT triggered here — doing so on every snapshot
+      // (and each enrich write emits another snapshot) caused a constant loop.
+      // It runs once per background sync instead (see _backgroundSync).
     }, onError: (e) {
       if (mounted) setState(() => _error = e.toString());
     });
-    load();
-    // Watch for unpicked orders every 45s.
+    // Throttled initial load (won't re-sync on every tab re-mount).
+    load(silent: true);
+    // Watch for unpicked orders every 2 min (light query, not a full sync).
     _watchTimer = Timer.periodic(
-        const Duration(seconds: 45), (_) => _checkUnpicked());
+        const Duration(minutes: 2), (_) => _checkUnpicked());
   }
 
   @override
@@ -84,7 +97,9 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
   /// pull fresh DoDoo orders in the BACKGROUND — never blocking the display.
   Future<void> load({bool silent = false}) async {
     await _loadRiderNames();
-    await _backgroundSync();
+    // A manual (non-silent) refresh forces a sync; auto/pull refreshes respect
+    // the cooldown so we don't keep hitting the DoDoo server.
+    await _backgroundSync(force: !silent);
   }
 
   Future<void> _loadRiderNames() async {
@@ -98,10 +113,105 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
   }
 
   /// Pulls fresh orders from DoDoo into Firestore; the live stream then updates
-  /// the list automatically.
-  Future<void> _backgroundSync() async {
+  /// the list automatically. Skips the heavy DoDoo fetch when it ran within the
+  /// cooldown (unless [force]) to keep server load low.
+  Future<void> _backgroundSync({bool force = false}) async {
+    final now = DateTime.now();
+    if (!force &&
+        _lastSyncAt != null &&
+        now.difference(_lastSyncAt!) < _syncCooldown) {
+      return; // synced recently — rely on the live stream meanwhile
+    }
+    _lastSyncAt = now;
     await _syncFromDodoo();
     await _checkUnpicked();
+    // One bounded enrichment pass per sync (not on every stream snapshot).
+    await _enrichSparseOrders();
+  }
+
+  /// Corrects the status of orders already in our DB so they match DoDoo's
+  /// current status (from [dodooStatusById]: order_number → internal status).
+  /// Skips orders assigned to one of our riders (we drive those + push to
+  /// DoDoo). Fixes stale orders wrongly stuck in the wrong section.
+  Future<void> _reconcileStatuses(Map<String, String> dodooStatusById) async {
+    if (dodooStatusById.isEmpty) return;
+    for (final o in List<Map<String, dynamic>>.from(_orders)) {
+      final orderNumber = o['order_number']?.toString() ?? '';
+      final dodoo = dodooStatusById[orderNumber];
+      if (dodoo == null) continue; // not in the DoDoo list (legacy) — leave it
+      final assigned =
+          (o['assigned_rider_id']?.toString() ?? '').trim().isNotEmpty;
+      final current = o['status']?.toString() ?? '';
+      if (!assigned && current != dodoo) {
+        try {
+          await _admin.updateOrder(o['id'].toString(), {'status': dodoo});
+        } catch (_) {/* best-effort */}
+      }
+    }
+  }
+
+  /// Fills detail (addresses, customer, items, pricing) into order cards that
+  /// were imported sparsely (the active/finished backfill). Fetches each order's
+  /// detail by id from DoDoo and caches it back to Firestore — the live stream
+  /// then refreshes the card. Guarded so it never loops or runs concurrently.
+  Future<void> _enrichSparseOrders() async {
+    if (_enriching) return;
+
+    bool needsEnrich(Map<String, dynamic> o) {
+      final hasTo = (o['to_address']?.toString() ?? '').trim().isNotEmpty;
+      final hasFrom = (o['from_address']?.toString() ?? '').trim().isNotEmpty;
+      final cart = o['cart_items'];
+      final hasItems = (cart is List && cart.isNotEmpty) ||
+          (o['items_description']?.toString() ?? '').trim().isNotEmpty;
+      final missingDetail = !hasTo && !hasFrom && !hasItems;
+      // Older imports lack the real order_date — fetch it so cards/detail show
+      // the true order date instead of the import day.
+      final missingDate =
+          (o['order_date']?.toString() ?? '').trim().isEmpty;
+      return missingDetail || missingDate;
+    }
+
+    final pending = _orders
+        .where((o) {
+          final id = o['id']?.toString() ?? '';
+          return id.isNotEmpty && !_enriched.contains(id) && needsEnrich(o);
+        })
+        .take(60)
+        .toList();
+    if (pending.isEmpty) return;
+
+    _enriching = true;
+    try {
+      // A few at a time so we don't hammer the DoDoo server.
+      for (var i = 0; i < pending.length; i += 5) {
+        final batch = pending.skip(i).take(5);
+        await Future.wait(batch.map(_enrichOne));
+      }
+    } finally {
+      _enriching = false;
+    }
+  }
+
+  Future<void> _enrichOne(Map<String, dynamic> o) async {
+    final id = o['id'].toString();
+    _enriched.add(id); // mark attempted so we don't retry in a loop
+    final orderNumber = o['order_number']?.toString() ?? '';
+    if (orderNumber.isEmpty) return;
+    try {
+      final detail = await _dodoo.getOrderDetail(orderNumber,
+          orderType: o['order_type']?.toString());
+      if (detail == null || detail.isNoData) return;
+      final full = detail.toSupabaseOrder(
+          cityCodeOverride: o['city_code']?.toString());
+      // Keep our own workflow + ordering fields; only add the detail.
+      full
+        ..remove('status')
+        ..remove('status_updated_at')
+        ..remove('order_number')
+        ..remove('city_code')
+        ..remove('created_at');
+      await _admin.updateOrder(id, full); // live stream refreshes the card
+    } catch (_) {/* best-effort */}
   }
 
   /// Fetches open orders from the DoDoo API and imports any that aren't already
@@ -119,12 +229,16 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
 
       final riderIds = await _admin.approvedRiderIds();
 
-      var imported = 0;
       final openIds = <String>{};
       final syncedCities = <String>{};
+      // order_number → current DoDoo internal status, for reconciliation.
+      final dodooStatusById = <String, String>{};
       for (final city in cities) {
         final pricePerKm = await _admin.pricePerKm(cityCode: city.code);
         final allOrders = await _dodoo.getAllOrders(cityCode: city.code);
+        for (final o in allOrders) {
+          dodooStatusById[o.orderId] = o.internalStatus;
+        }
 
         // Bucket by status so each lands in its admin section. The endpoint
         // returns thousands of years-old finished orders, so:
@@ -153,9 +267,8 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
         syncedCities.add(city.code);
         openIds.addAll(open.map((o) => o.orderId));
 
-        // Only OPEN orders are dispatched to riders + counted as "new".
-        imported +=
-            await _importOrders(open, city, pricePerKm, riderIds);
+        // Only OPEN orders are dispatched to riders.
+        await _importOrders(open, city, pricePerKm, riderIds);
         // Active + recent finished: imported so the sections show, but sparse
         // (no per-order detail fetch) and never broadcast.
         await _importOrders(active, city, pricePerKm, const [],
@@ -170,15 +283,22 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
         await _admin.cancelMissingPending(openIds, syncedCities);
       }
 
-      // Audible + banner alert when genuinely new orders arrive — but not on
-      // the first sync (those orders were already waiting on the platform).
-      if (imported > 0 && !_firstSync) {
+      // Reconcile: correct the status of every order we already show so it
+      // matches DoDoo's current status (fixes stale/wrong statuses). Orders
+      // assigned to one of OUR riders are left alone — those we drive.
+      await _reconcileStatuses(dodooStatusById);
+
+      // Alert ONLY for open orders we've never alerted on before — so the
+      // banner/sound fires once per genuinely-new order, never on every sync.
+      // The first sync after launch is silent (those were already waiting).
+      final newlySeen = openIds.where(_notifiedOrderIds.add).toList();
+      if (newlySeen.isNotEmpty && !_firstSync) {
+        final n = newlySeen.length;
         SoundService.instance.playNewOrder().ignore();
         NotificationService.instance
             .showNewOrder(
-              title: 'New order${imported > 1 ? 's' : ''} received',
-              body:
-                  '$imported new order${imported > 1 ? 's' : ''} synced and broadcast to riders.',
+              title: 'New order${n > 1 ? 's' : ''} received',
+              body: '$n new order${n > 1 ? 's' : ''} broadcast to riders.',
             )
             .ignore();
       }
@@ -319,7 +439,21 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
             (f) => (f?.toString().toLowerCase() ?? '').contains(q));
       }).toList();
     }
+    // Latest on top in EVERY status section: sort by order time
+    // (created_at), falling back to last status change.
+    list = [...list]..sort((a, b) => _sortKey(b).compareTo(_sortKey(a)));
     return list;
+  }
+
+  /// The timestamp used to sort orders newest-first. Prefers the real DoDoo
+  /// order date, then the placed time (created_at), then last status update.
+  static DateTime _sortKey(Map<String, dynamic> o) {
+    final raw =
+        o['order_date'] ?? o['created_at'] ?? o['status_updated_at'];
+    if (raw is String) {
+      return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   @override
@@ -636,7 +770,7 @@ class _OrderCard extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                '${(order['customer_name']?.toString().isNotEmpty ?? false) ? order['customer_name'] : 'Customer'}  ·  ${_fmtDate(order['created_at'])}',
+                '${(order['customer_name']?.toString().isNotEmpty ?? false) ? order['customer_name'] : 'Customer'}  ·  ${_fmtDate(order['order_date'] ?? order['created_at'])}',
                 style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -648,15 +782,9 @@ class _OrderCard extends StatelessWidget {
               _line('Drop', order['to_address']?.toString() ?? '—',
                   const Color(0xFFDC2626)),
               const SizedBox(height: 8),
-              Text(
-                _footer(order, assignedId, riderName),
-                style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade700),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+              _footerRow(order, assignedId, riderName),
             ],
           ),
         ),
@@ -687,21 +815,69 @@ class _OrderCard extends StatelessWidget {
     );
   }
 
-  /// Text-only footer: distance (only if known) · fare · assignee.
-  String _footer(Map<String, dynamic> order, String? assignedId, String? riderName) {
-    final km = (order['distance_in_km'] as num?)?.toDouble() ?? 0;
-    final earnRaw = order['total_earning'] ?? order['minimum_fare'] ?? 0;
-    final earnNum = earnRaw is num
-        ? earnRaw.toDouble()
-        : double.tryParse(earnRaw.toString()) ?? 0;
-    final earn =
-        earnNum % 1 == 0 ? earnNum.toStringAsFixed(0) : earnNum.toStringAsFixed(2);
-    final parts = <String>[
-      if (km > 0) '${km % 1 == 0 ? km.toStringAsFixed(0) : km.toStringAsFixed(1)} km',
-      '₹$earn',
-      assignedId == null ? 'Unassigned' : (riderName ?? 'Rider'),
-    ];
-    return parts.join('   ·   ');
+  /// Footer row: rider (name or "Unassigned") on the left, the rider's
+  /// earning and the order total on the right.
+  Widget _footerRow(
+      Map<String, dynamic> order, String? assignedId, String? riderName) {
+    final name = assignedId == null ? 'Unassigned' : (riderName ?? 'Rider');
+    final earn = _money(order['total_earning'] ?? order['minimum_fare'] ?? 0);
+    final total = _money(order['order_total'] ?? 0);
+    final hasTotal = (order['order_total'] != null) &&
+        ((order['order_total'] is num
+                ? (order['order_total'] as num).toDouble()
+                : double.tryParse(order['order_total'].toString()) ?? 0) >
+            0);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(
+            assignedId == null
+                ? Icons.person_off_rounded
+                : Icons.person_rounded,
+            size: 14,
+            color: assignedId == null
+                ? Colors.grey.shade500
+                : const Color(0xFF2563EB)),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            name,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: assignedId == null
+                    ? Colors.grey.shade600
+                    : const Color(0xFF1C1D00)),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Rider earns  ₹$earn',
+                style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF6B6E00))),
+            if (hasTotal)
+              Text('Order total  ₹$total',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade600)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Formats a money value, dropping a trailing ".0".
+  static String _money(dynamic v) {
+    final n = v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0;
+    return n % 1 == 0 ? n.toStringAsFixed(0) : n.toStringAsFixed(2);
   }
 
   String _fmtDate(dynamic raw) {

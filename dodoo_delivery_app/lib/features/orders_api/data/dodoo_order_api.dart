@@ -18,7 +18,8 @@ class DodooOrderApi {
             Dio(BaseOptions(
               baseUrl: DodooApiConfig.baseUrl,
               connectTimeout: const Duration(seconds: 20),
-              receiveTimeout: const Duration(seconds: 20),
+              // The city list can be large (thousands of orders) — allow time.
+              receiveTimeout: const Duration(seconds: 60),
               headers: {'Content-Type': 'application/json'},
               // The list endpoint returns 200 with a JSON array; treat <500 as
               // a real response so we can surface API-level messages.
