@@ -63,6 +63,12 @@ class RiderDashboardState {
   String get bankIfsc => rider['bank_ifsc_code']?.toString() ?? '';
   bool get isVerified => rider['is_verified'] == true;
   bool get isDocumentVerified => rider['is_document_verified'] == true;
+
+  /// KYC identifiers (misspelled `aadhar_*` key kept to match the DB).
+  String get aadhaarNumber => rider['aadhar_number']?.toString() ?? '';
+  String get drivingLicenseNumber =>
+      rider['driving_license_number']?.toString() ?? '';
+
   String get aadhaarFrontUrl => rider['aadhar_front_url']?.toString() ?? '';
   String get aadhaarBackUrl => rider['aadhar_back_url']?.toString() ?? '';
   String get licenseImageUrl => rider['driving_license_image_url']?.toString() ?? '';
@@ -80,6 +86,30 @@ class RiderDashboardState {
   /// Free-text message the admin sent to this rider (e.g. "Aadhaar is blurry").
   String get adminComment => rider['admin_comment']?.toString() ?? '';
 
+  /// Profile edits the rider has submitted that are awaiting admin approval.
+  /// The live fields above stay unchanged until the admin approves, so the
+  /// rider keeps working with their current details in the meantime.
+  /// (keys: 'first_name' | 'last_name' | 'email' | 'address' | 'upi_number'
+  ///  | 'aadhar_number' | 'driving_license_number' | 'profile_picture_url')
+  Map<String, dynamic> get pendingProfileChanges =>
+      rider['pending_profile_changes'] is Map
+          ? Map<String, dynamic>.from(rider['pending_profile_changes'] as Map)
+          : const {};
+
+  bool get hasPendingProfileChanges => pendingProfileChanges.isNotEmpty;
+
+  /// The pending (not-yet-approved) value for a field, or null if none.
+  String? pendingValue(String key) =>
+      pendingProfileChanges[key]?.toString();
+
+  /// True when the rider has changes awaiting admin review — profile/photo
+  /// edits (pending_profile_changes) or a document still marked pending. While
+  /// true the profile shows a "pending review" status instead of "verified".
+  bool get hasPendingReview {
+    if (hasPendingProfileChanges) return true;
+    return documentStatus.values.any((v) => v.toString() == 'pending');
+  }
+
   double get walletBalance =>
       double.tryParse(rider['wallet_balance']?.toString() ?? '0') ?? 0;
   double get rating =>
@@ -95,9 +125,18 @@ class RiderDashboardState {
       double.tryParse(earnings['month']?.toString() ?? '0') ?? 0;
   int get completedOrders =>
       int.tryParse(earnings['completed_orders']?.toString() ?? '0') ?? 0;
+  int get todayOrders =>
+      int.tryParse(earnings['today_orders']?.toString() ?? '0') ?? 0;
 
   bool get hasActiveOrder => activeOrders.isNotEmpty;
   bool get hasPendingOffers => pendingOffers.isNotEmpty;
+
+  /// A profile photo is mandatory. True when the rider has neither a live photo
+  /// nor one already submitted (awaiting approval) — used to require existing
+  /// riders to add a photo before they can go online. A submitted (pending)
+  /// photo satisfies this so the rider isn't stuck offline waiting on approval.
+  bool get needsProfilePhoto =>
+      profilePictureUrl.isEmpty && pendingValue('profile_picture_url') == null;
 
   // History summary helpers
   int get historyCompletedCount =>

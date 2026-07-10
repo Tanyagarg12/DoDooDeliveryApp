@@ -6,11 +6,10 @@ import 'package:flutter/material.dart';
 /// `in_transit`, `reached`, `completed`, `cancelled`) are presented in the admin
 /// as these sections:
 ///
-///   • Ongoing    (pending)                       – waiting for a rider
-///   • InProgress (picked_up/in_transit/reached)  – picked up / on the way
-///   • Accept     (accepted)                      – accepted by a rider
-///   • Completed  (completed = DoDoo "Deliver")   – delivered
-///   • Cancel     (cancelled)                     – cancelled
+///   • Ongoing    (pending)                              – waiting for a rider
+///   • InProgress (accepted/picked_up/in_transit)        – a rider is on it
+///   • Completed  (completed = DoDoo "Deliver")          – delivered
+///   • Cancel     (cancelled)                            – cancelled
 ///
 /// This is the single source of truth for the label, description and colour of
 /// each status across the admin screens.
@@ -49,19 +48,21 @@ class AdminOrderStatus {
     Color(0xFFD97706),
     ['pending'],
   );
+  // A rider who has accepted (but not yet picked up) is "in progress".
   static const inProgress = AdminOrderStatus._(
     'inprogress',
     'InProgress',
-    'Picked up / on the way',
+    'Accepted by a rider',
     Color(0xFF7C3AED),
-    ['picked_up', 'in_transit', 'reached'],
+    ['accepted'],
   );
+  // Once the rider has picked the order up, it shows under "Accept".
   static const accept = AdminOrderStatus._(
     'accept',
     'Accept',
-    'Accepted by a rider',
+    'Picked up by the rider',
     Color(0xFF2563EB),
-    ['accepted'],
+    ['picked_up', 'in_transit', 'reached'],
   );
   static const completed = AdminOrderStatus._(
     'completed',
@@ -105,22 +106,25 @@ class AdminOrderStatus {
 class RiderOrderFlow {
   RiderOrderFlow._();
 
-  /// Internal status keys, in order. ('reached' is treated as 'in_transit'.)
-  static const steps = ['accepted', 'picked_up', 'in_transit', 'completed'];
+  /// Internal status keys, in order: Accepted → Picked Up → Delivered.
+  /// (No separate "on the way" step — legacy in_transit/reached count as
+  /// picked up.)
+  static const steps = ['accepted', 'picked_up', 'completed'];
 
-  /// Rider-facing label for each status. Older 'reached' rows map to 'On the Way'.
+  /// Rider-facing label for each status.
   static const labels = {
     'accepted': 'Accepted',
     'picked_up': 'Picked Up',
-    'in_transit': 'On the Way',
-    'reached': 'On the Way',
+    'in_transit': 'Picked Up', // legacy
+    'reached': 'Picked Up', // legacy
     'completed': 'Delivered',
   };
 
-  /// Normalises a stored status onto the 4-step flow ('reached' → 'in_transit').
+  /// Normalises a stored status onto the 3-step flow.
   static String normalize(String? status) {
     final s = status ?? 'accepted';
-    return s == 'reached' ? 'in_transit' : s;
+    if (s == 'reached' || s == 'in_transit') return 'picked_up';
+    return s;
   }
 
   /// The step the order is currently on (index into [steps]).

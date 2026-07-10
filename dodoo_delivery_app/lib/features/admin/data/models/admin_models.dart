@@ -73,6 +73,7 @@ class AdminRiderModel extends AdminRider {
     required super.approvalLogs,
     required super.rating,
     required super.totalOrders,
+    super.hasPendingReview,
   });
 
   factory AdminRiderModel.fromJson(Map<String, dynamic> json) {
@@ -106,7 +107,19 @@ class AdminRiderModel extends AdminRider {
       approvalLogs: logs,
       rating: (json['rating'] as num?)?.toDouble() ?? 5.0,
       totalOrders: (json['total_orders'] as num?)?.toInt() ?? 0,
+      hasPendingReview: _computePendingReview(json),
     );
+  }
+
+  /// A rider is "pending review" when they have unreviewed profile edits
+  /// (pending_profile_changes) or any document still marked pending.
+  static bool _computePendingReview(Map<String, dynamic> json) {
+    final ppc = json['pending_profile_changes'];
+    final hasProfilePending = ppc is Map && ppc.isNotEmpty;
+    final ds = json['document_status'];
+    final hasDocPending =
+        ds is Map && ds.values.any((v) => v.toString() == 'pending');
+    return hasProfilePending || hasDocPending;
   }
 
   static DateTime _parseDate(dynamic raw) {

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/widgets/support_modal.dart';
 import '../../domain/entities/rider_entity.dart';
 import '../controllers/auth_controller.dart';
 import '../controllers/auth_state.dart';
+import 'rider_registration_screen.dart';
 
 /// Shown when a rider's account is pending, rejected, or suspended.
 /// Refreshes on app-resume and via the manual "Check Status Now" button — no
@@ -53,11 +55,22 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Navigate to home immediately when admin approves
+    // React to status changes detected on refresh (resume / "Check Status Now"):
+    //  • approved            → go straight to the dashboard
+    //  • any other change     → rebuild this screen with the new status so the
+    //    right actions show (e.g. Re-apply appears when pending → rejected).
     ref.listen<AuthState>(authControllerProvider, (_, next) {
-      if (next is AuthAuthenticated && next.rider.isApproved && mounted) {
+      if (next is! AuthAuthenticated || !mounted) return;
+      if (next.rider.isApproved) {
         Navigator.pushNamedAndRemoveUntil(
             context, '/home', (r) => false, arguments: next.rider);
+      } else if (next.rider.accountStatus != widget.rider.accountStatus) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AccountStatusScreen(rider: next.rider),
+          ),
+        );
       }
     });
 
@@ -189,7 +202,7 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen>
         return const _StatusConfig(
           title: 'Application Rejected',
           subtitle:
-              'We were unable to approve your application.\nPlease contact support for more information.',
+              'We were unable to approve your application.\nYou can re-apply below with fresh details.',
           icon: Icons.cancel_rounded,
           iconColor: Color(0xFFDC2626),
           badgeColor: Color(0xFFFEE2E2),
@@ -371,6 +384,45 @@ class _ActionButtons extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
+          // Lets a rider respond to an admin note while still under review by
+          // re-submitting their details (which also clears the note).
+          OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => RiderRegistrationScreen(phone: rider.phone),
+              ),
+            ),
+            icon: const Icon(Icons.edit_document),
+            label: const Text('Update my details'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+              foregroundColor: const Color(0xFFD97706),
+              side: const BorderSide(color: Color(0xFFD97706)),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (rider.isRejected) ...[
+          FilledButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => RiderRegistrationScreen(phone: rider.phone),
+              ),
+            ),
+            icon: const Icon(Icons.assignment_turned_in_rounded),
+            label: const Text('Re-apply with fresh details'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF059669),
+              minimumSize: const Size.fromHeight(50),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+          const SizedBox(height: 12),
         ],
         OutlinedButton.icon(
           onPressed: () => _logout(context, ref),
@@ -387,7 +439,7 @@ class _ActionButtons extends StatelessWidget {
         if (rider.isRejected || rider.isSuspended) ...[
           const SizedBox(height: 12),
           TextButton(
-            onPressed: () {},
+            onPressed: () => showSupportSheet(context),
             child: Text(
               'Contact Support',
               style: TextStyle(color: config.iconColor),

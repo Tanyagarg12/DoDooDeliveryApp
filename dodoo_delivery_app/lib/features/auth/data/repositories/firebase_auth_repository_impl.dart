@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../../core/cloudinary/cloudinary_service.dart';
@@ -122,6 +123,8 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
       'address': data.address ?? '',
       'aadhar_number': data.aadhaarNumber ?? '',
       'driving_license_number': data.drivingLicenseNumber ?? '',
+      // (Re)submitting details answers any admin note — clear it.
+      'admin_comment': FieldValue.delete(),
     };
     await _uploadRegistrationDocs(id, data, fields);
     await _fs.createRider(id, fields);

@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
@@ -160,10 +161,12 @@ class RiderFirestoreApi {
     final col = colMap[docType]!;
 
     // Re-uploading a doc resets it to "pending" so the admin re-verifies it.
+    // The rider acted, so clear any admin note (it's been answered).
     await _fs.updateRider({
       col: url,
       'is_document_verified': false,
       'document_status.$docType': 'pending',
+      'admin_comment': FieldValue.delete(),
     });
     final rider = await _fs.getRider() ?? {};
     return Map<String, dynamic>.from(
@@ -172,24 +175,58 @@ class RiderFirestoreApi {
 
   // ── Profile ───────────────────────────────────────────────────────────────
 
+  /// Stages the rider's profile edits for admin approval instead of applying
+  /// them live. Only fields that actually differ from the current (approved)
+  /// value are queued into `pending_profile_changes`; the live rider doc — and
+  /// therefore everything else in the app — keeps showing the current values
+  /// until the admin approves the change. Reverting a field back to its live
+  /// value drops it from the pending set.
   Future<Map<String, dynamic>> updateProfile({
     required Map<String, String> fields,
     XFile? photo,
   }) async {
-    final updates = Map<String, dynamic>.from(fields);
+    final rider = await _fs.getRider() ?? {};
+
+    // Start from any edits already awaiting approval so an unrelated pending
+    // change isn't lost when the rider edits a different field.
+    final pending = <String, dynamic>{};
+    final existing = rider['pending_profile_changes'];
+    if (existing is Map) {
+      pending.addAll(Map<String, dynamic>.from(existing));
+    }
+
+    fields.forEach((key, value) {
+      final live = (rider[key] ?? '').toString();
+      if (value == live) {
+        pending.remove(key); // reverted to the approved value — no longer pending
+      } else {
+        pending[key] = value;
+      }
+    });
 
     if (photo != null) {
       final uid = FirebaseAuth.instance.currentUser!.uid;
-      updates['profile_picture_url'] = await CloudinaryService.instance
-          .uploadFile(photo.path, folder: 'profile_pictures', publicId: uid);
-      // New photo → admin re-verifies it.
-      updates['document_status.profile'] = 'pending';
+      // Upload under a distinct public id so the current (approved) photo is
+      // untouched until the admin approves this new one.
+      pending['profile_picture_url'] = await CloudinaryService.instance
+          .uploadFile(photo.path,
+              folder: 'profile_pictures', publicId: 'pending_$uid');
     }
 
+    final updates = <String, dynamic>{};
+    if (pending.isEmpty) {
+      updates['pending_profile_changes'] = FieldValue.delete();
+    } else {
+      updates['pending_profile_changes'] = pending;
+      updates['profile_change_requested_at'] = FieldValue.serverTimestamp();
+    }
+    // The rider acted on their profile — clear any admin note (it's answered).
+    updates['admin_comment'] = FieldValue.delete();
     await _fs.updateRider(updates);
-    final rider = await _fs.getRider() ?? {};
-    rider.addAll(updates);
-    return rider;
+
+    // Return the (unchanged) live doc plus the pending set so the UI can show
+    // the "awaiting approval" badges.
+    return await _fs.getRider() ?? {};
   }
 
   // ── Auth helper ───────────────────────────────────────────────────────────

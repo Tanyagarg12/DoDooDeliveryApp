@@ -131,7 +131,13 @@ class _HomeShellContentState extends ConsumerState<_HomeShellContent> {
                     Navigator.pop(dctx);
                     final n = ref.read(riderDashboardProvider.notifier);
                     n.dismissOfflineReminder();
-                    n.setStatus('online');
+                    // A profile photo is required to go online — send them to
+                    // Profile to add one if they don't have one yet.
+                    if (ref.read(riderDashboardProvider).needsProfilePhoto) {
+                      ref.read(selectedHomeTabProvider.notifier).state = 4;
+                    } else {
+                      n.setStatus('online');
+                    }
                   },
                   child: const Text('Go Online'),
                 ),

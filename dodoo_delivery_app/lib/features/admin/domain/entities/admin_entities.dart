@@ -70,6 +70,10 @@ class AdminRider {
   final double rating;
   final int totalOrders;
 
+  /// True when the rider has submitted profile edits or a document that the
+  /// admin hasn't reviewed yet (pending_profile_changes or a pending document).
+  final bool hasPendingReview;
+
   const AdminRider({
     required this.id,
     required this.phone,
@@ -92,6 +96,7 @@ class AdminRider {
     required this.approvalLogs,
     required this.rating,
     required this.totalOrders,
+    this.hasPendingReview = false,
   });
 
   bool get isPending => accountStatus == 'pending';

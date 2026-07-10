@@ -370,14 +370,48 @@ class _StatusCardState extends ConsumerState<_StatusCard>
                   label: 'Online',
                   icon: Icons.check_circle_rounded,
                   isSelected: status == 'online',
-                  onTap: isLoading
-                      ? null
-                      : () => ref
-                          .read(riderDashboardProvider.notifier)
-                          .setStatus('online'),
+                  onTap: isLoading ? null : () => _goOnline(context),
                 ),
               ],
             ),
+        ],
+      ),
+    );
+  }
+
+  /// Goes online, but first requires a profile photo. A rider with no photo
+  /// (and none pending) is sent to their Profile to add one instead.
+  void _goOnline(BuildContext context) {
+    if (widget.state.needsProfilePhoto) {
+      _promptForPhoto(context);
+      return;
+    }
+    ref.read(riderDashboardProvider.notifier).setStatus('online');
+  }
+
+  void _promptForPhoto(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        icon: const Icon(Icons.add_a_photo_rounded, color: AppColors.primary),
+        title: const Text('Profile photo required'),
+        content: const Text(
+          'Please add a profile photo before going online. You can add it in '
+          'your Profile — you\'ll be able to go online as soon as it\'s added.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dCtx);
+              // Jump to the Profile tab (index 4 on the home shell).
+              ref.read(selectedHomeTabProvider.notifier).state = 4;
+            },
+            child: const Text('Go to Profile'),
+          ),
         ],
       ),
     );
@@ -532,8 +566,8 @@ class _TodayStatsRow extends StatelessWidget {
             icon: Icons.local_shipping_rounded,
             iconColor: AppColors.primary,
             iconBg: AppColors.primaryContainer,
-            label: 'Orders',
-            value: '${state.completedOrders}',
+            label: "Today's Orders",
+            value: '${state.todayOrders}',
           ),
         ),
         const SizedBox(width: 10),

@@ -43,9 +43,14 @@ android {
         resValues = true
     }
 
-    // Two separate apps from one codebase: the rider app and the admin app.
+    // Three separate apps from one codebase: rider, admin, and store.
     // Build with:  flutter run/build apk --flavor rider -t lib/main.dart
     //              flutter build apk --flavor admin -t lib/main_admin.dart
+    //              flutter build apk --flavor store -t lib/main_store.dart
+    // NOTE: each flavor's applicationId must be registered in Firebase
+    // (google-services.json). rider + admin are registered; the store package
+    // "com.dodoo.delivery.store" must be added in the Firebase console before
+    // an Android build of the store flavor will succeed.
     flavorDimensions += "app"
     productFlavors {
         create("rider") {
@@ -57,6 +62,11 @@ android {
             dimension = "app"
             applicationId = "com.dodoo.delivery.admin"
             resValue("string", "app_name", "DoDoo Admin")
+        }
+        create("store") {
+            dimension = "app"
+            applicationId = "com.dodoo.delivery.store"
+            resValue("string", "app_name", "DoDoo Store")
         }
     }
 

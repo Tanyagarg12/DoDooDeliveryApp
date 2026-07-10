@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/constants/order_status.dart';
 import '../../../../core/constants/support_config.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/utils/earning.dart';
 import '../../../../core/utils/maps_launcher.dart';
 import '../../../../core/utils/order_items.dart';
 import '../controllers/rider_dashboard_controller.dart';
@@ -111,6 +112,22 @@ class ActiveOrderCard extends ConsumerWidget {
                       icon: Icons.currency_rupee_rounded,
                       label: '${order['total_earning'] ?? order['minimum_fare'] ?? '0'}',
                       highlight: true,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                // How the earning is calculated, e.g. "2 km × ₹40 = ₹80".
+                Row(
+                  children: [
+                    Icon(Icons.calculate_rounded,
+                        size: 13, color: cs.onSurfaceVariant),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text('You earn: ${earningBreakdown(order)}',
+                          style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: cs.onSurfaceVariant)),
                     ),
                   ],
                 ),

@@ -16,6 +16,9 @@ class SecureStorageService {
   // secret (Firestore is the source of truth), so a plain mirror is a safe,
   // reliable fallback that keeps them logged in until they log out manually.
   static const _prefsRiderKey = 'rider_session_json';
+  // Store (merchant) app session — same dual secure + plain-mirror approach.
+  static const _prefsStoreKey = 'store_session_json';
+  static const _secureStoreKey = 'store_session_data';
 
   Future<void> saveTokens({
     required String accessToken,
@@ -61,6 +64,31 @@ class SecureStorageService {
     return rider != null && rider.isNotEmpty;
   }
 
+  // ── Store (merchant) session ───────────────────────────────────────────────
+
+  Future<void> saveStoreJson(String json) async {
+    try {
+      await _storage.write(key: _secureStoreKey, value: json);
+    } catch (_) {/* fall back to the plain mirror below */}
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsStoreKey, json);
+    } catch (_) {}
+  }
+
+  Future<String?> getStoreJson() async {
+    try {
+      final v = await _storage.read(key: _secureStoreKey);
+      if (v != null && v.isNotEmpty) return v;
+    } catch (_) {/* secure read flaked — use the plain mirror */}
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getString(_prefsStoreKey);
+      if (v != null && v.isNotEmpty) return v;
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> clearAll() async {
     try {
       await _storage.deleteAll();
@@ -68,6 +96,7 @@ class SecureStorageService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_prefsRiderKey);
+      await prefs.remove(_prefsStoreKey);
     } catch (_) {}
   }
 }

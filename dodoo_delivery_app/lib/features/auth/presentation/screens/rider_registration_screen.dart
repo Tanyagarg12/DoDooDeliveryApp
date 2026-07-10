@@ -36,11 +36,15 @@ class _RiderRegistrationScreenState
   final _addressCtrl = TextEditingController();
   final _aadhaarCtrl = TextEditingController();
   final _licenseCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
 
   File? _profilePic;
   File? _aadhaarFront;
   File? _aadhaarBack;
   File? _licenseImage;
+  // Set true when the rider tries to submit without a profile photo, so the
+  // photo picker shows a required-field error like the other fields.
+  bool _photoMissing = false;
 
   @override
   void dispose() {
@@ -50,23 +54,39 @@ class _RiderRegistrationScreenState
     _addressCtrl.dispose();
     _aadhaarCtrl.dispose();
     _licenseCtrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
 
-    // Aadhaar: a valid number OR an uploaded image is required.
-    final hasAadhaarNumber = _aadhaarCtrl.text.trim().isNotEmpty;
-    if (!hasAadhaarNumber && _aadhaarFront == null) {
-      _showDocWarning('Enter your Aadhaar number or upload the Aadhaar image');
+    // Every document is mandatory. Check them in order and stop at the first
+    // one that's missing so the rider gets a clear, single message.
+    if (_profilePic == null) {
+      setState(() => _photoMissing = true);
+      // The picker sits at the top of the form — scroll it into view so the
+      // rider sees the error, not just the snackbar by the button.
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+      _showDocWarning('Please add a profile photo');
       return;
     }
-
-    // Driving License: a valid number OR an uploaded image is required.
-    final hasLicenseNumber = _licenseCtrl.text.trim().isNotEmpty;
-    if (!hasLicenseNumber && _licenseImage == null) {
-      _showDocWarning('Enter your license number or upload the license image');
+    if (_aadhaarFront == null) {
+      _showDocWarning('Please upload the Aadhaar card — front');
+      return;
+    }
+    if (_aadhaarBack == null) {
+      _showDocWarning('Please upload the Aadhaar card — back');
+      return;
+    }
+    if (_licenseImage == null) {
+      _showDocWarning('Please upload the driving license image');
       return;
     }
 
@@ -95,7 +115,12 @@ class _RiderRegistrationScreenState
 
   Future<void> _pickProfilePic(ImageSource source) async {
     final f = await ImageUtils.pickImage(source);
-    if (f != null) setState(() => _profilePic = f);
+    if (f != null) {
+      setState(() {
+        _profilePic = f;
+        _photoMissing = false;
+      });
+    }
   }
 
   @override
@@ -149,6 +174,7 @@ class _RiderRegistrationScreenState
           Form(
             key: _formKey,
             child: ListView(
+              controller: _scrollCtrl,
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               children: [
                 // Intro banner
@@ -195,6 +221,7 @@ class _RiderRegistrationScreenState
                 _ProfilePicRow(
                   current: _profilePic,
                   onPickSource: _pickProfilePic,
+                  showError: _photoMissing,
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -243,15 +270,15 @@ class _RiderRegistrationScreenState
                 const _SectionHeader(label: 'Aadhaar'),
                 const SizedBox(height: 6),
                 Text(
-                  'Enter your Aadhaar number OR upload the Aadhaar image — either is fine.',
+                  'Enter your Aadhaar number and upload both sides of the card.',
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                 ),
                 const SizedBox(height: 12),
                 CustomTextField(
-                  label: 'Aadhaar Number',
+                  label: 'Aadhaar Number *',
                   hint: 'Enter 12-digit Aadhaar number',
                   controller: _aadhaarCtrl,
-                  validator: Validators.aadhaarFormat,
+                  validator: Validators.aadhaar,
                   keyboardType: TextInputType.number,
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
@@ -264,29 +291,29 @@ class _RiderRegistrationScreenState
                 DocumentUploadTile(
                   label: 'Aadhaar Card — Front',
                   icon: Icons.credit_card_outlined,
-                  isRequired: false,
+                  isRequired: true,
                   onFilePicked: (f) => setState(() => _aadhaarFront = f),
                 ),
                 const SizedBox(height: 10),
                 DocumentUploadTile(
-                  label: 'Aadhaar Card — Back (optional)',
+                  label: 'Aadhaar Card — Back',
                   icon: Icons.credit_card_outlined,
-                  isRequired: false,
+                  isRequired: true,
                   onFilePicked: (f) => setState(() => _aadhaarBack = f),
                 ),
                 const SizedBox(height: 24),
                 const _SectionHeader(label: 'Driving License'),
                 const SizedBox(height: 6),
                 Text(
-                  'Enter your license number OR upload the license image — either is fine.',
+                  'Enter your license number and upload the license image.',
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                 ),
                 const SizedBox(height: 12),
                 CustomTextField(
-                  label: 'Driving License Number',
+                  label: 'Driving License Number *',
                   hint: 'Enter license number',
                   controller: _licenseCtrl,
-                  validator: Validators.drivingLicenseFormat,
+                  validator: Validators.drivingLicenseRequired,
                   keyboardType: TextInputType.text,
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9 -]')),
@@ -299,7 +326,7 @@ class _RiderRegistrationScreenState
                 DocumentUploadTile(
                   label: 'Driving License Image',
                   icon: Icons.drive_eta_outlined,
-                  isRequired: false,
+                  isRequired: true,
                   onFilePicked: (f) => setState(() => _licenseImage = f),
                 ),
                 const SizedBox(height: 28),
@@ -379,9 +406,17 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _ProfilePicRow extends StatelessWidget {
-  const _ProfilePicRow({required this.current, required this.onPickSource});
+  const _ProfilePicRow({
+    required this.current,
+    required this.onPickSource,
+    this.showError = false,
+  });
   final File? current;
   final void Function(ImageSource) onPickSource;
+
+  /// When true (submit attempted with no photo), the picker shows a red ring
+  /// and a "required" message.
+  final bool showError;
 
   void _pickSheet(BuildContext context) {
     showModalBottomSheet(
@@ -440,8 +475,10 @@ class _ProfilePicRow extends StatelessWidget {
                       ],
                     ),
                     border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.5),
-                        width: 2),
+                        color: showError
+                            ? Colors.red.shade400
+                            : AppColors.primary.withValues(alpha: 0.5),
+                        width: showError ? 2.5 : 2),
                   ),
                   child: ClipOval(
                     child: current != null
@@ -471,11 +508,17 @@ class _ProfilePicRow extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            current == null ? 'Add profile photo' : 'Change photo',
+            showError
+                ? 'Profile photo is required'
+                : current == null
+                    ? 'Add profile photo *'
+                    : 'Change photo',
             style: TextStyle(
                 fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey.shade600),
+                fontWeight: showError ? FontWeight.w700 : FontWeight.w600,
+                color: (current == null || showError)
+                    ? Colors.red.shade400
+                    : Colors.grey.shade600),
           ),
         ],
       ),

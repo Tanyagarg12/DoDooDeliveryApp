@@ -22,6 +22,9 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
 
   final _db = AdminFirestoreService.instance;
   final _minutesCtrl = TextEditingController();
+  final _baseFareCtrl = TextEditingController(); // flat base added to earning
+  final _minChargeCtrl = TextEditingController(); // min store earning (floor)
+  final _pdpChargeCtrl = TextEditingController(); // flat PDP earning
   // One km-rate field per city.
   final Map<String, TextEditingController> _rateCtrls = {
     for (final c in DodooCities.all) c.code: TextEditingController(),
@@ -38,6 +41,9 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
   @override
   void dispose() {
     _minutesCtrl.dispose();
+    _baseFareCtrl.dispose();
+    _minChargeCtrl.dispose();
+    _pdpChargeCtrl.dispose();
     for (final c in _rateCtrls.values) {
       c.dispose();
     }
@@ -46,6 +52,9 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
 
   Future<void> _load() async {
     final m = await _db.offlineReminderMinutes();
+    final base = await _db.riderBaseFare();
+    final minC = await _db.minDeliveryCharge();
+    final pdp = await _db.pickDropCharge();
     for (final city in DodooCities.all) {
       final r = await _db.pricePerKm(cityCode: city.code);
       _rateCtrls[city.code]!.text =
@@ -53,7 +62,12 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
     }
     if (!mounted) return;
     setState(() {
+      String fmt(double d) =>
+          d.toStringAsFixed(d.truncateToDouble() == d ? 0 : 2);
       _minutesCtrl.text = m.toString();
+      _baseFareCtrl.text = fmt(base);
+      _minChargeCtrl.text = fmt(minC);
+      _pdpChargeCtrl.text = fmt(pdp);
       _loading = false;
     });
   }
@@ -75,9 +89,19 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
         return;
       }
     }
+    final base = double.tryParse(_baseFareCtrl.text.trim());
+    if (base == null || base < 0 || base > 100000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid base fare.')),
+      );
+      return;
+    }
     setState(() => _saving = true);
     try {
       await _db.setSetting('offline_reminder_minutes', mins.toString());
+      await _db.setSetting('rider_base_fare', _baseFareCtrl.text.trim());
+      await _db.setSetting('min_delivery_charge', _minChargeCtrl.text.trim());
+      await _db.setSetting('pickdrop_charge', _pdpChargeCtrl.text.trim());
       for (final city in DodooCities.all) {
         await _db.setSetting(
             'price_per_km_${city.code}', _rateCtrls[city.code]!.text.trim());
@@ -147,13 +171,60 @@ class _AdminSettingsScreenState extends ConsumerState<AdminSettingsScreen> {
                   ),
                 ]),
                 const SizedBox(height: 16),
-                _card('Pricing — per city', [
+                _card('Rider earning', [
                   const Text(
-                    'Delivery rate per kilometre for each city. Used as the fare '
-                    'for imported orders that don\'t carry a price.',
+                    'Store orders: base fare + (distance km × city per-km rate), '
+                    'never below the minimum delivery charge. Pick & Drop (PDP) '
+                    'orders pay a flat charge.',
                     style: TextStyle(fontSize: 12.5, color: Colors.black54),
                   ),
                   const SizedBox(height: 12),
+                  TextField(
+                    controller: _baseFareCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'Base fare (₹)',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.account_balance_wallet_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _minChargeCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'Minimum delivery charge (₹)',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.south_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _pdpChargeCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'Pick & Drop (PDP) charge (₹)',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.swap_horiz_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text('Per-km rate by city (₹)',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
                   for (final city in DodooCities.all) ...[
                     TextField(
                       controller: _rateCtrls[city.code],

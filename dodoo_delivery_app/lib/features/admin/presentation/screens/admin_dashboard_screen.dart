@@ -1,8 +1,13 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/dodoo_cities.dart';
+import '../../../../core/firebase/firebase_refs.dart';
 import '../../../../core/services/notification_center.dart';
+import '../../../../core/services/notification_service.dart';
 import '../../../../core/widgets/city_selector.dart';
 import '../../../../core/widgets/fade_in.dart';
 import '../../../../core/widgets/support_modal.dart';
@@ -16,6 +21,8 @@ import 'admin_orders_tab.dart';
 import 'admin_profile_screen.dart';
 import 'admin_rider_detail_screen.dart';
 import 'admin_settings_screen.dart';
+import 'admin_stores_tab.dart';
+import 'admin_withdrawals_screen.dart';
 
 class AdminDashboardScreen extends ConsumerStatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -33,19 +40,32 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
   late final TabController _tab;
   final _ordersKey = GlobalKey<AdminOrdersTabState>();
 
+  // Riders we've already alerted about having pending changes, so each new
+  // change notifies once. First snapshot is silent (pre-existing pending riders
+  // shouldn't ping as if they just arrived).
+  final Set<String> _notifiedPending = {};
+  bool _firstReviewCheck = true;
+  Set<String> _lastPendingIds = {};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ridersSub;
+
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 2, vsync: this);
+    _tab = TabController(length: 4, vsync: this);
     AdminProfile.instance.load();
     NotificationCenter.instance.load();
+    NotificationService.instance.init();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    // Real-time watch on riders so a rider's new changes notify the admin the
+    // moment they're submitted, and the "pending review" badges stay current.
+    _ridersSub = Db.riders.snapshots().listen(_onRidersSnapshot);
   }
 
   @override
   void dispose() {
     _tab.dispose();
     _searchCtrl.dispose();
+    _ridersSub?.cancel();
     super.dispose();
   }
 
@@ -61,6 +81,54 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
           search: _searchCtrl.text.trim(),
           silent: silent,
         );
+  }
+
+  /// Real-time riders watch: notifies the admin the moment a rider submits
+  /// changes and keeps the "pending review" badges current.
+  void _onRidersSnapshot(QuerySnapshot<Map<String, dynamic>> snap) {
+    final pending = <String, String>{}; // riderId -> display name
+    for (final d in snap.docs) {
+      final data = d.data();
+      if (_riderHasPendingReview(data)) {
+        final name =
+            '${data['first_name'] ?? ''} ${data['last_name'] ?? ''}'.trim();
+        pending[d.id] = name.isEmpty ? 'A rider' : name;
+      }
+    }
+
+    final firstCheck = _firstReviewCheck;
+    _firstReviewCheck = false;
+    var notified = 0;
+    for (final e in pending.entries) {
+      if (_notifiedPending.contains(e.key)) continue;
+      _notifiedPending.add(e.key);
+      if (firstCheck || notified >= 5) continue; // silent first run; cap burst
+      notified++;
+      NotificationService.instance
+          .showApproval(
+            title: 'Rider updated their details',
+            body: '${e.value} submitted changes for review.',
+          )
+          .ignore();
+    }
+    // Forget riders that are no longer pending so a future change re-notifies.
+    _notifiedPending.removeWhere((id) => !pending.containsKey(id));
+
+    // Refresh the displayed list only when the pending set changes — so status
+    // churn (online/offline) doesn't trigger constant reloads.
+    final ids = pending.keys.toSet();
+    if (ids.length != _lastPendingIds.length ||
+        !ids.every(_lastPendingIds.contains)) {
+      _lastPendingIds = ids;
+      _load(silent: true);
+    }
+  }
+
+  bool _riderHasPendingReview(Map<String, dynamic> data) {
+    final ppc = data['pending_profile_changes'];
+    if (ppc is Map && ppc.isNotEmpty) return true;
+    final ds = data['document_status'];
+    return ds is Map && ds.values.any((v) => v.toString() == 'pending');
   }
 
   @override
@@ -116,17 +184,52 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
             ),
           ],
         ),
-        bottom: TabBar(
-          controller: _tab,
-          indicatorColor: const Color(0xFF1C1D00),
-          indicatorWeight: 3,
-          labelColor: const Color(0xFF1C1D00),
-          unselectedLabelColor: const Color(0xFF1C1D00).withValues(alpha: 0.55),
-          labelStyle: const TextStyle(fontWeight: FontWeight.w700),
-          tabs: const [
-            Tab(icon: Icon(Icons.receipt_long_rounded), text: 'Orders'),
-            Tab(icon: Icon(Icons.people_alt_rounded), text: 'Riders'),
-          ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+            child: TabBar(
+              controller: _tab,
+              indicatorSize: TabBarIndicatorSize.tab,
+              dividerHeight: 0,
+              splashBorderRadius: BorderRadius.circular(14),
+              indicator: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color: const Color(0xFF1C1D00).withValues(alpha: 0.18)),
+              ),
+              labelColor: const Color(0xFF1C1D00),
+              unselectedLabelColor:
+                  const Color(0xFF1C1D00).withValues(alpha: 0.6),
+              labelStyle:
+                  const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5),
+              unselectedLabelStyle:
+                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
+              tabs: const [
+                Tab(
+                    height: 46,
+                    icon: Icon(Icons.receipt_long_rounded, size: 20),
+                    iconMargin: EdgeInsets.only(bottom: 2),
+                    text: 'Orders'),
+                Tab(
+                    height: 46,
+                    icon: Icon(Icons.people_alt_rounded, size: 20),
+                    iconMargin: EdgeInsets.only(bottom: 2),
+                    text: 'Riders'),
+                Tab(
+                    height: 46,
+                    icon: Icon(Icons.storefront_rounded, size: 20),
+                    iconMargin: EdgeInsets.only(bottom: 2),
+                    text: 'Stores'),
+                Tab(
+                    height: 46,
+                    icon: Icon(Icons.account_balance_rounded, size: 20),
+                    iconMargin: EdgeInsets.only(bottom: 2),
+                    text: 'Payouts'),
+              ],
+            ),
+          ),
         ),
         actions: [
           // Only the two most-used quick actions stay as icons; everything
@@ -247,6 +350,12 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
               Expanded(child: _buildBody(listState)),
             ],
           ),
+
+          // ── Tab 3: Stores (register / approve / manage) ────────────────
+          const AdminStoresTab(),
+
+          // ── Tab 4: Withdrawals (store payout requests) ────────────────
+          const AdminWithdrawalsScreen(),
         ],
       ),
     );
@@ -593,7 +702,9 @@ class _RiderCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: rider.hasPendingReview
+            ? const BorderSide(color: Color(0xFFD97706), width: 1.5)
+            : BorderSide(color: Colors.grey.shade200),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
@@ -660,6 +771,31 @@ class _RiderCard extends StatelessWidget {
                       style: TextStyle(
                           color: Colors.grey.shade600, fontSize: 12),
                     ),
+                    if (rider.hasPendingReview) ...[
+                      const SizedBox(height: 5),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFFFCD34D)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.hourglass_top_rounded,
+                                size: 12, color: Color(0xFFB45309)),
+                            SizedBox(width: 4),
+                            Text('Changes pending review',
+                                style: TextStyle(
+                                    color: Color(0xFF92400E),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),

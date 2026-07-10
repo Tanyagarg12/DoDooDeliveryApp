@@ -36,6 +36,12 @@ class _AdminRiderDetailScreenState
   Map<String, dynamic> _docStatus = {};
   final _commentCtrl = TextEditingController();
   bool _kycBusy = false;
+  String _upiNumber = ''; // rider's GPay / PhonePe (UPI) number
+  // Profile edits the rider submitted that are awaiting approval, plus the
+  // current rider doc (for showing old → new values).
+  Map<String, dynamic> _pendingChanges = {};
+  Map<String, dynamic> _riderDoc = {};
+  bool _profileChangeBusy = false;
 
   @override
   void initState() {
@@ -68,12 +74,77 @@ class _AdminRiderDetailScreenState
       final data = doc.data() ?? {};
       if (!mounted) return;
       setState(() {
+        _riderDoc = data;
         _docStatus =
             Map<String, dynamic>.from(data['document_status'] as Map? ?? {});
-        final c = data['admin_comment']?.toString() ?? '';
-        if (_commentCtrl.text.isEmpty) _commentCtrl.text = c;
+        _pendingChanges = Map<String, dynamic>.from(
+            data['pending_profile_changes'] as Map? ?? {});
+        _upiNumber = data['upi_number']?.toString() ?? '';
+        // The comment box is for composing a NEW message — it isn't pre-filled
+        // with the last one. The current active note is shown read-only in the
+        // documents section (it auto-clears once the rider updates a detail).
       });
     } catch (_) {/* best-effort */}
+  }
+
+  /// Approve the rider's pending profile edits: apply them to the live fields
+  /// and clear the pending set. Once written, the change reflects everywhere
+  /// (rider app, admin, order attribution) on the next read.
+  Future<void> _approveProfileChanges() async {
+    final changes = Map<String, dynamic>.from(_pendingChanges);
+    if (changes.isEmpty) return;
+    setState(() => _profileChangeBusy = true);
+    try {
+      await Db.riders.doc(widget.riderId).set({
+        ...changes,
+        'pending_profile_changes': FieldValue.delete(),
+        'profile_changes_reviewed_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (!mounted) return;
+      setState(() => _pendingChanges = {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Profile changes approved.'),
+            backgroundColor: Color(0xFF059669)),
+      );
+      _load(); // reload so the header / info section show the new values
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Could not approve changes. Try again.'),
+              backgroundColor: Color(0xFFDC2626)),
+        );
+      }
+    }
+    if (mounted) setState(() => _profileChangeBusy = false);
+  }
+
+  /// Reject the rider's pending edits — discard them without touching the live
+  /// fields. The rider keeps their current details.
+  Future<void> _rejectProfileChanges() async {
+    if (_pendingChanges.isEmpty) return;
+    setState(() => _profileChangeBusy = true);
+    try {
+      await Db.riders.doc(widget.riderId).set(
+        {'pending_profile_changes': FieldValue.delete()},
+        SetOptions(merge: true),
+      );
+      if (!mounted) return;
+      setState(() => _pendingChanges = {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile changes rejected.')),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Could not reject changes. Try again.'),
+              backgroundColor: Color(0xFFDC2626)),
+        );
+      }
+    }
+    if (mounted) setState(() => _profileChangeBusy = false);
   }
 
   /// True when every document the admin has acted on is verified (and none are
@@ -101,16 +172,24 @@ class _AdminRiderDetailScreenState
     } catch (_) {/* keep the optimistic value */}
   }
 
-  /// Save the admin's comment to the rider (visible in the rider app).
+  /// Save the admin's comment to the rider (visible in the rider app, with a
+  /// notification). The input box is cleared after sending; the note stays
+  /// stored until the rider updates a detail, which auto-removes it.
   Future<void> _saveComment() async {
     FocusScope.of(context).unfocus();
+    final text = _commentCtrl.text.trim();
+    if (text.isEmpty) return;
     setState(() => _kycBusy = true);
     try {
       await Db.riders.doc(widget.riderId).set(
-        {'admin_comment': _commentCtrl.text.trim()},
+        {'admin_comment': text},
         SetOptions(merge: true),
       );
       if (mounted) {
+        setState(() {
+          _riderDoc = {..._riderDoc, 'admin_comment': text};
+          _commentCtrl.clear();
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text('Comment sent to rider.'),
@@ -238,8 +317,21 @@ class _AdminRiderDetailScreenState
                     loading: isActionLoading,
                     onAction: (a) => _takeAction(context, rider, a),
                   ),
+                  if (_pendingChanges.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    _ProfileChangeRequests(
+                      changes: _pendingChanges,
+                      current: _riderDoc,
+                      busy: _profileChangeBusy,
+                      onApprove: _approveProfileChanges,
+                      onReject: _rejectProfileChanges,
+                    ),
+                  ],
                   const SizedBox(height: 16),
-                  _InfoSection(rider: rider, docsVerified: _docsVerified),
+                  _InfoSection(
+                      rider: rider,
+                      docsVerified: _docsVerified,
+                      upiNumber: _upiNumber),
                   const SizedBox(height: 16),
                   RiderPerformanceSection(riderId: widget.riderId),
                   const SizedBox(height: 16),
@@ -250,6 +342,8 @@ class _AdminRiderDetailScreenState
                     onSetStatus: _setDocStatus,
                     commentCtrl: _commentCtrl,
                     onSaveComment: _saveComment,
+                    currentComment:
+                        _riderDoc['admin_comment']?.toString() ?? '',
                   ),
                   const SizedBox(height: 16),
                   _AuditLog(logs: rider.approvalLogs),
@@ -539,7 +633,9 @@ class _ActionBar extends StatelessWidget {
         // Suspend is shown separately at the bottom of the page.
         return [];
       case 'rejected':
-        return ['approve'];
+        // Rejection wipes the rider's details — there's nothing left to
+        // approve. The rider must re-apply with fresh details from their app.
+        return [];
       case 'suspended':
         return ['reactivate', 'reject'];
       default:
@@ -644,8 +740,10 @@ class _ActionButton extends StatelessWidget {
 // ── Info section ──────────────────────────────────────────────────────────────
 
 class _InfoSection extends StatelessWidget {
-  const _InfoSection({required this.rider, this.docsVerified = false});
+  const _InfoSection(
+      {required this.rider, this.docsVerified = false, this.upiNumber = ''});
   final bool docsVerified;
+  final String upiNumber;
   final AdminRider rider;
 
   @override
@@ -668,6 +766,7 @@ class _InfoSection extends StatelessWidget {
             _InfoRow('Email', rider.email!),
           if (rider.address?.isNotEmpty ?? false)
             _InfoRow('Address', rider.address!),
+          _InfoRow('GPay / PhonePe', upiNumber.isEmpty ? '—' : upiNumber),
           _InfoRow('Joined', _fmtDate(rider.joinedDate)),
           _InfoRow('Rating', '${rider.rating.toStringAsFixed(1)} ★'),
           _InfoRow('Total Orders', '${rider.totalOrders}'),
@@ -749,6 +848,205 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
+// ── Profile change requests ─────────────────────────────────────────────────
+
+class _ProfileChangeRequests extends StatelessWidget {
+  const _ProfileChangeRequests({
+    required this.changes,
+    required this.current,
+    required this.busy,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  final Map<String, dynamic> changes;
+  final Map<String, dynamic> current;
+  final bool busy;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+
+  static const _labels = {
+    'first_name': 'First Name',
+    'last_name': 'Last Name',
+    'email': 'Email',
+    'address': 'Address',
+    'upi_number': 'GPay / PhonePe',
+    'aadhar_number': 'Aadhaar Number',
+    'driving_license_number': 'DL Number',
+    'profile_picture_url': 'Profile Photo',
+  };
+
+  static const _amber = Color(0xFFD97706);
+
+  @override
+  Widget build(BuildContext context) {
+    // Show known fields first, in a stable order, then anything else.
+    final keys = <String>[
+      ..._labels.keys.where(changes.containsKey),
+      ...changes.keys.where((k) => !_labels.containsKey(k)),
+    ];
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.manage_accounts_rounded, size: 18, color: _amber),
+              SizedBox(width: 8),
+              Text('Profile change requests',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'The rider requested these edits. Their current details stay active '
+            'until you approve.',
+            style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 12),
+          ...keys.map((k) => _row(k, current[k]?.toString() ?? '',
+              changes[k]?.toString() ?? '')),
+          const SizedBox(height: 4),
+          if (busy)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(8),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onReject,
+                    icon: const Icon(Icons.cancel_rounded, size: 16),
+                    label: const Text('Reject'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFDC2626),
+                      side: const BorderSide(color: Color(0xFFFCA5A5)),
+                      minimumSize: const Size(0, 42),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onApprove,
+                    icon: const Icon(Icons.check_circle_rounded, size: 16),
+                    label: const Text('Approve'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF059669),
+                      minimumSize: const Size(0, 42),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(String key, String oldVal, String newVal) {
+    final label = _labels[key] ?? key;
+    if (key == 'profile_picture_url') {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                _photo(oldVal, 'Current'),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 10),
+                  child: Icon(Icons.arrow_forward_rounded, size: 18),
+                ),
+                _photo(newVal, 'New'),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+          const SizedBox(height: 2),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  oldVal.isEmpty ? '—' : oldVal,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey.shade500,
+                    decoration: TextDecoration.lineThrough,
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: Icon(Icons.arrow_forward_rounded, size: 14),
+              ),
+              Expanded(
+                child: Text(
+                  newVal.isEmpty ? '—' : newVal,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF065F46)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _photo(String url, String caption) {
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: url.isEmpty
+              ? Container(
+                  width: 56,
+                  height: 56,
+                  color: Colors.grey.shade200,
+                  child: const Icon(Icons.person, color: Colors.grey),
+                )
+              : Image.network(url,
+                  width: 56,
+                  height: 56,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Container(
+                        width: 56,
+                        height: 56,
+                        color: Colors.grey.shade200,
+                        child: const Icon(Icons.broken_image,
+                            color: Colors.grey),
+                      )),
+        ),
+        const SizedBox(height: 2),
+        Text(caption,
+            style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+      ],
+    );
+  }
+}
+
 // ── Documents section ─────────────────────────────────────────────────────────
 
 class _DocumentsSection extends StatelessWidget {
@@ -759,6 +1057,7 @@ class _DocumentsSection extends StatelessWidget {
     required this.onSetStatus,
     required this.commentCtrl,
     required this.onSaveComment,
+    this.currentComment = '',
   });
   final AdminRider rider;
   final Map<String, dynamic> docStatus;
@@ -766,6 +1065,10 @@ class _DocumentsSection extends StatelessWidget {
   final void Function(String docType, String status) onSetStatus;
   final TextEditingController commentCtrl;
   final VoidCallback onSaveComment;
+
+  /// The note currently shown to the rider (auto-clears when they update a
+  /// detail). Displayed read-only above the compose box.
+  final String currentComment;
 
   static const _lime = Color(0xFFBABC2F);
 
@@ -796,6 +1099,38 @@ class _DocumentsSection extends StatelessWidget {
           const SizedBox(height: 6),
           Text('Sent to the rider (e.g. "Aadhaar is blurry, please re-upload").',
               style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600)),
+          if (currentComment.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFCD34D)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Current note shown to rider',
+                      style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF92400E))),
+                  const SizedBox(height: 3),
+                  Text(currentComment.trim(),
+                      style: const TextStyle(
+                          fontSize: 12.5, color: Color(0xFF92400E))),
+                  const SizedBox(height: 3),
+                  Text('Auto-clears when the rider updates any detail.',
+                      style: TextStyle(
+                          fontSize: 10.5,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.brown.shade400)),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           TextField(
             controller: commentCtrl,

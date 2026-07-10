@@ -25,6 +25,23 @@ service cloud.firestore {
       allow read, create, update: if request.auth != null;
       allow delete: if false;
     }
+    // Stores/merchants — same policy as riders (approval is enforced app-side
+    // for now; see firestore.rules.proposed for the admin-only hardening).
+    match /stores/{id} {
+      allow read, create, update: if request.auth != null;
+      allow delete: if false;
+
+      // A store's menu (items + prices). Subcollections need their own rule —
+      // the parent match does not cascade. Menu items may be deleted (the store
+      // manages its own catalog).
+      match /menu/{itemId} {
+        allow read, write: if request.auth != null;
+      }
+      // Bank accounts for payouts
+      match /bank_accounts/{id} {
+        allow read, create, update, delete: if request.auth != null;
+      }
+    }
     match /orders/{id} {
       allow read, create, update: if request.auth != null;
       allow delete: if false;
@@ -34,6 +51,14 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /wallet_transactions/{id} {
+      allow read, create, update: if request.auth != null;
+      allow delete: if false;
+    }
+    match /store_wallet_transactions/{id} {
+      allow read, create, update: if request.auth != null;
+      allow delete: if false;
+    }
+    match /stores/{storeId}/withdrawal_requests/{id} {
       allow read, create, update: if request.auth != null;
       allow delete: if false;
     }

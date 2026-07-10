@@ -28,15 +28,25 @@ class DodooOrderApi {
 
   final Dio _dio;
 
-  /// GET GetAllTypeOrdersByCity/{CityCode}/All → all orders for a city.
-  /// The endpoint is a GET (the city + "All" live in the path); it returns
-  /// every status, so callers filter to the ones they want.
+  /// POST GetAllTypeOrdersByCityStatusCombi → recent orders for a city filtered
+  /// to the given statuses. This is MUCH faster than the full /All list (~4s &
+  /// ~40KB vs ~28s & ~2MB) because the server caps + filters server-side, and
+  /// it still includes recent finished orders for the admin history sections.
   Future<List<DodooOrder>> getAllOrders({
     String cityCode = DodooApiConfig.defaultCityCode,
+    List<String> statusList = const [
+      'Open',
+      'Accept',
+      'InProgress',
+      'Deliver',
+      'Cancel',
+    ],
   }) async {
     try {
-      final res =
-          await _dio.get<dynamic>('/GetAllTypeOrdersByCity/$cityCode/All');
+      final res = await _dio.post<dynamic>(
+        '/GetAllTypeOrdersByCityStatusCombi',
+        data: {'CityCode': cityCode, 'Statuslist': statusList},
+      );
       return _parseList(res.data);
     } on DioException catch (e) {
       throw DodooApiException(_dioMessage(e));
@@ -62,6 +72,17 @@ class DodooOrderApi {
     return getPickDropDetail(orderId);
   }
 
+  /// GET GetStoreOrdersByStoreID/{storeId}
+  /// Fetches all orders for a specific store by phone/store ID.
+  Future<List<DodooOrder>> getStoreOrders(String storeId) async {
+    try {
+      final res = await _dio.get<dynamic>('/GetStoreOrdersByStoreID/$storeId');
+      return _parseList(res.data);
+    } on DioException catch (e) {
+      throw DodooApiException(_dioMessage(e));
+    }
+  }
+
   /// Maps our internal order status to DoDoo's status word.
   /// Returns null for statuses there's nothing to push (e.g. 'pending').
   /// Maps our internal order status to DoDoo's status word for UpdateOrderStatus.
@@ -73,10 +94,9 @@ class DodooOrderApi {
       case 'accepted':
         return 'Accept';
       case 'picked_up':
-        return 'InProgress';
       case 'in_transit':
       case 'reached':
-        return 'OnGoing';
+        return 'InProgress';
       case 'completed':
         return 'Deliver';
       case 'cancelled':

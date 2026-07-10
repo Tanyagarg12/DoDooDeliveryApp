@@ -49,6 +49,20 @@ class AdminFirestoreService {
     return snap.docs.map((d) => d.id).toList();
   }
 
+  /// Maps each approved store's DoDoo Store ID → its Firestore store id, so the
+  /// order sync can route DoDoo store orders to the matching registered store.
+  /// Only stores with a non-empty `dodoo_store_id` are included.
+  Future<Map<String, String>> approvedStoresByDodooId() async {
+    final snap =
+        await Db.stores.where('account_status', isEqualTo: 'approved').get();
+    final out = <String, String>{};
+    for (final d in snap.docs) {
+      final ext = (d.data()['dodoo_store_id']?.toString() ?? '').trim();
+      if (ext.isNotEmpty) out[ext] = d.id;
+    }
+    return out;
+  }
+
   /// All riders (id, name, phone, account_status) for the reassign picker.
   Future<List<Map<String, dynamic>>> ridersForPicker() async {
     final snap = await Db.riders.get();
@@ -119,8 +133,54 @@ class AdminFirestoreService {
     // Keep the real order time (set from the DoDoo OrderDate) for sorting;
     // only fall back to the server clock when the order carries no date.
     data['created_at'] = data['created_at'] ?? FieldValue.serverTimestamp();
+    // First (immediate) broadcast — track count + time so the auto re-broadcast
+    // schedule (2 min, 5 min, then stop) can run off it.
+    if (riderIds.isNotEmpty) {
+      data['broadcast_count'] = 1;
+      data['first_broadcast_at'] = FieldValue.serverTimestamp();
+    }
     final ref = await Db.orders.add(data);
     await _broadcast(ref.id, riderIds);
+  }
+
+  /// Auto re-broadcast schedule for pending, unassigned orders:
+  ///   broadcast #1 = on import (immediate), #2 = 2 min later, #3 = 5 min later.
+  /// After 3 broadcasts it STOPS — the admin can still re-broadcast manually.
+  /// Returns how many orders were re-broadcast this run.
+  Future<int> runScheduledRebroadcasts(List<String> riderIds) async {
+    if (riderIds.isEmpty) return 0;
+    final snap = await Db.orders.where('status', isEqualTo: 'pending').get();
+    final now = DateTime.now();
+    var count = 0;
+    for (final d in snap.docs) {
+      final m = _map(d);
+      if ((m['assigned_rider_id']?.toString() ?? '').trim().isNotEmpty) continue;
+      final bc = (m['broadcast_count'] as num?)?.toInt() ?? 1;
+      if (bc >= 3) continue; // schedule exhausted — manual only from here
+      final first =
+          _parseDate(m['first_broadcast_at']) ?? _parseDate(m['created_at']);
+      if (first == null) continue;
+      final elapsed = now.difference(first);
+      final due = (bc == 1 && elapsed >= const Duration(minutes: 2)) ||
+          (bc == 2 && elapsed >= const Duration(minutes: 5));
+      if (!due) continue;
+
+      // Clear old offers and re-offer to all approved riders, bump the count.
+      final existing =
+          await Db.orderOffers.where('order_id', isEqualTo: d.id).get();
+      final batch = _db.batch();
+      for (final o in existing.docs) {
+        batch.delete(o.reference);
+      }
+      await batch.commit();
+      await _broadcast(d.id, riderIds);
+      await d.reference.update({
+        'broadcast_count': bc + 1,
+        'status_updated_at': FieldValue.serverTimestamp(),
+      });
+      count++;
+    }
+    return count;
   }
 
   Future<void> updateOrder(String orderId, Map<String, dynamic> patch) async {
@@ -221,6 +281,75 @@ class AdminFirestoreService {
     }
     final g = await getSetting('price_per_km');
     return double.tryParse(g ?? '') ?? 8.0;
+  }
+
+  /// Flat base fare added to every (store) order's rider earning. Default 0.
+  Future<double> riderBaseFare() async {
+    final v = await getSetting('rider_base_fare');
+    return double.tryParse(v ?? '') ?? 0.0;
+  }
+
+  /// Minimum rider earning for a store order (a floor under base + km×rate).
+  /// Admin-configurable; defaults to ₹42.
+  Future<double> minDeliveryCharge() async {
+    final v = await getSetting('min_delivery_charge');
+    return double.tryParse(v ?? '') ?? 42.0;
+  }
+
+  /// Flat rider earning for a Pick & Drop (PDP) order. Admin-configurable;
+  /// defaults to ₹60.
+  Future<double> pickDropCharge() async {
+    final v = await getSetting('pickdrop_charge');
+    return double.tryParse(v ?? '') ?? 60.0;
+  }
+
+  /// Recomputes total_earning using the current rules:
+  ///   PDP   → flat [pdpCharge]
+  ///   store → max(baseFare + distance_km × city rate, [minFare])
+  ///
+  /// ONLY recomputes **pending (ongoing)** orders — so a settings change is
+  /// reflected on ongoing + new orders, but an order a rider has already
+  /// accepted keeps its earning LOCKED (accepted / in-progress / completed /
+  /// cancelled are never re-priced).
+  Future<void> recomputeEarnings({
+    required double baseFare,
+    required double minFare,
+    required double pdpCharge,
+    required Map<String, double> ratesByCity,
+    required double defaultRate,
+  }) async {
+    final snap = await Db.orders.where('status', isEqualTo: 'pending').get();
+    for (final d in snap.docs) {
+      final m = d.data();
+      // Don't re-price an order a rider already took.
+      if ((m['assigned_rider_id']?.toString() ?? '').trim().isNotEmpty) continue;
+
+      final on = (m['order_number'] ?? '').toString().toUpperCase();
+      final otype = (m['order_type'] ?? '').toString().toLowerCase();
+      final isPdp = on.contains('PDP') || otype.contains('pick');
+      final km = (m['distance_in_km'] as num?)?.toDouble() ?? 2.0;
+      final rate = ratesByCity[(m['city_code'] ?? '').toString()] ?? defaultRate;
+
+      double earn;
+      if (isPdp) {
+        earn = pdpCharge;
+      } else {
+        final calc = baseFare + km * rate;
+        earn = calc < minFare ? minFare : calc;
+      }
+      earn = double.parse(earn.toStringAsFixed(2));
+
+      final cur = (m['total_earning'] as num?)?.toDouble();
+      if (cur == null || (cur - earn).abs() > 0.01 || m['per_km_rate'] == null) {
+        await d.reference.update({
+          'total_earning': earn,
+          'minimum_fare': earn,
+          'per_km_rate': isPdp ? 0 : rate,
+          'base_fare': isPdp ? 0 : baseFare,
+          'min_fare': isPdp ? 0 : minFare,
+        });
+      }
+    }
   }
 
   /// Minutes a rider can stay offline before the reminder fires. Defaults to 15.

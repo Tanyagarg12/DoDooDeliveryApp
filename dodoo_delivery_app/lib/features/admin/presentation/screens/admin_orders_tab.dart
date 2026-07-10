@@ -24,17 +24,16 @@ class AdminOrdersTab extends StatefulWidget {
 }
 
 class AdminOrdersTabState extends State<AdminOrdersTab> {
-  // Minutes a pending order may wait unpicked before auto re-broadcast + alert.
-  static const _unpickedMinutes = 5;
   // How many recent finished (delivered/cancelled) orders per city to backfill
   // so the Completed/Cancelled sections show recent history — the endpoint
   // returns thousands of years-old orders we must not import wholesale.
-  static const _recentFinishedPerCity = 40;
+  static const _recentFinishedPerCity = 25;
 
   final _dodoo = DodooOrderApi();
   final _admin = AdminFirestoreService.instance;
   final _searchCtrl = TextEditingController();
   Timer? _watchTimer;
+  Timer? _rebroadcastTimer;
   StreamSubscription<List<Map<String, dynamic>>>? _ordersSub;
   // Backfill detail (addresses/items) for sparsely-imported order cards.
   final Set<String> _enriched = {};
@@ -54,7 +53,7 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
   // An AdminOrderStatus.key (ongoing | inprogress | accept | completed | cancel)
   String _filter = 'ongoing';
   String _query = '';
-  String? _cityCode; // selected delivery city; null = All cities
+  String? _cityCode = 'ATP'; // selected delivery city (default Anantapur)
   int _reboardedAlert = 0; // # of orders auto re-broadcast in the last check
   // Suppresses the new-order chime on the very first sync (orders already on
   // the platform shouldn't sound like they just arrived).
@@ -77,17 +76,22 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
     }, onError: (e) {
       if (mounted) setState(() => _error = e.toString());
     });
-    // Throttled initial load (won't re-sync on every tab re-mount).
+    // Show cached orders immediately (via the live stream) + one background
+    // sync. Then auto-refresh from DoDoo every 5 minutes in the background.
     load(silent: true);
-    // Watch for unpicked orders every 2 min (light query, not a full sync).
+    // Auto-refresh orders from DoDoo every 5 minutes (background).
     _watchTimer = Timer.periodic(
-        const Duration(minutes: 2), (_) => _checkUnpicked());
+        const Duration(minutes: 5), (_) => _backgroundSync(force: true));
+    // Run the broadcast schedule (2 min / 5 min) every minute so it fires on time.
+    _rebroadcastTimer = Timer.periodic(
+        const Duration(minutes: 1), (_) => _checkUnpicked());
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
     _watchTimer?.cancel();
+    _rebroadcastTimer?.cancel();
     _ordersSub?.cancel();
     super.dispose();
   }
@@ -97,9 +101,34 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
   /// pull fresh DoDoo orders in the BACKGROUND — never blocking the display.
   Future<void> load({bool silent = false}) async {
     await _loadRiderNames();
+    // Reflect any earning-settings change on pending orders right away (cheap,
+    // not gated by the DoDoo sync cooldown).
+    await _recomputeEarnings();
     // A manual (non-silent) refresh forces a sync; auto/pull refreshes respect
     // the cooldown so we don't keep hitting the DoDoo server.
     await _backgroundSync(force: !silent);
+  }
+
+  /// Recomputes earnings of PENDING orders from the current admin settings, so
+  /// a price change in Settings is reflected on ongoing orders. Accepted /
+  /// in-progress / finished orders keep their locked earning.
+  Future<void> _recomputeEarnings() async {
+    try {
+      final base = await _admin.riderBaseFare();
+      final minC = await _admin.minDeliveryCharge();
+      final pdp = await _admin.pickDropCharge();
+      final rates = <String, double>{};
+      for (final c in DodooCities.all) {
+        rates[c.code] = await _admin.pricePerKm(cityCode: c.code);
+      }
+      await _admin.recomputeEarnings(
+        baseFare: base,
+        minFare: minC,
+        pdpCharge: pdp,
+        ratesByCity: rates,
+        defaultRate: await _admin.pricePerKm(),
+      );
+    } catch (_) {/* best-effort */}
   }
 
   Future<void> _loadRiderNames() async {
@@ -142,6 +171,10 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
       final assigned =
           (o['assigned_rider_id']?.toString() ?? '').trim().isNotEmpty;
       final current = o['status']?.toString() ?? '';
+      // A store is handling this order (accept → prepare → ready). DoDoo still
+      // reports it "open", so don't reconcile it back to pending — the store
+      // owns it until it marks Ready (which sets pending + broadcasts).
+      if (current == 'placed' || current == 'preparing') continue;
       if (!assigned && current != dodoo) {
         try {
           await _admin.updateOrder(o['id'].toString(), {'status': dodoo});
@@ -158,6 +191,10 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
     if (_enriching) return;
 
     bool needsEnrich(Map<String, dynamic> o) {
+      // Skip finished orders — they load their detail on-demand when opened,
+      // so we don't waste time fetching detail for dozens of them on each sync.
+      final s = o['status']?.toString() ?? '';
+      if (s == 'completed' || s == 'cancelled') return false;
       final hasTo = (o['to_address']?.toString() ?? '').trim().isNotEmpty;
       final hasFrom = (o['from_address']?.toString() ?? '').trim().isNotEmpty;
       final cart = o['cart_items'];
@@ -203,13 +240,22 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
       if (detail == null || detail.isNoData) return;
       final full = detail.toSupabaseOrder(
           cityCodeOverride: o['city_code']?.toString());
-      // Keep our own workflow + ordering fields; only add the detail.
+      // Keep our own workflow + ordering + earning fields; only add the detail
+      // (addresses, customer, items, bill). Earning/distance were computed at
+      // import with the per-km rate — don't recompute them here (no rate → 0).
       full
         ..remove('status')
         ..remove('status_updated_at')
         ..remove('order_number')
         ..remove('city_code')
-        ..remove('created_at');
+        ..remove('created_at')
+        ..remove('total_earning')
+        ..remove('minimum_fare')
+        ..remove('distance_in_km')
+        ..remove('estimated_time_minutes')
+        ..remove('per_km_rate')
+        ..remove('base_fare')
+        ..remove('min_fare');
       await _admin.updateOrder(id, full); // live stream refreshes the card
     } catch (_) {/* best-effort */}
   }
@@ -228,13 +274,22 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
           : [DodooCities.byCode(_cityCode)];
 
       final riderIds = await _admin.approvedRiderIds();
+      // DoDoo Store ID → registered store id, for routing store orders to the
+      // store (accept → prepare → ready) before they reach riders.
+      final storesByDodooId = await _admin.approvedStoresByDodooId();
+      // Earning settings (same across cities; per-km is per city below).
+      final baseFare = await _admin.riderBaseFare();
+      final minCharge = await _admin.minDeliveryCharge();
+      final pdpCharge = await _admin.pickDropCharge();
 
       final openIds = <String>{};
       final syncedCities = <String>{};
+      final ratesByCity = <String, double>{};
       // order_number → current DoDoo internal status, for reconciliation.
       final dodooStatusById = <String, String>{};
       for (final city in cities) {
         final pricePerKm = await _admin.pricePerKm(cityCode: city.code);
+        ratesByCity[city.code] = pricePerKm;
         final allOrders = await _dodoo.getAllOrders(cityCode: city.code);
         for (final o in allOrders) {
           dodooStatusById[o.orderId] = o.internalStatus;
@@ -268,13 +323,25 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
         openIds.addAll(open.map((o) => o.orderId));
 
         // Only OPEN orders are dispatched to riders.
-        await _importOrders(open, city, pricePerKm, riderIds);
+        await _importOrders(open, city, pricePerKm, riderIds,
+            baseFare: baseFare,
+            minDeliveryCharge: minCharge,
+            pickDropCharge: pdpCharge,
+            storesByDodooId: storesByDodooId);
         // Active + recent finished: imported so the sections show, but sparse
         // (no per-order detail fetch) and never broadcast.
         await _importOrders(active, city, pricePerKm, const [],
-            fetchDetail: false);
+            fetchDetail: false,
+            baseFare: baseFare,
+            minDeliveryCharge: minCharge,
+            pickDropCharge: pdpCharge,
+            storesByDodooId: storesByDodooId);
         await _importOrders(recentFinished, city, pricePerKm, const [],
-            fetchDetail: false);
+            fetchDetail: false,
+            baseFare: baseFare,
+            minDeliveryCharge: minCharge,
+            pickDropCharge: pdpCharge,
+            storesByDodooId: storesByDodooId);
       }
 
       // Pull-sync: any of our still-pending orders that DoDoo no longer lists
@@ -287,6 +354,18 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
       // matches DoDoo's current status (fixes stale/wrong statuses). Orders
       // assigned to one of OUR riders are left alone — those we drive.
       await _reconcileStatuses(dodooStatusById);
+
+      // Recompute earnings so any stale order (e.g. one still carrying DoDoo's
+      // delivery charge) is corrected to base+km×rate / min / PDP rules.
+      try {
+        await _admin.recomputeEarnings(
+          baseFare: baseFare,
+          minFare: minCharge,
+          pdpCharge: pdpCharge,
+          ratesByCity: ratesByCity,
+          defaultRate: await _admin.pricePerKm(),
+        );
+      } catch (_) {/* best-effort */}
 
       // Alert ONLY for open orders we've never alerted on before — so the
       // banner/sound fires once per genuinely-new order, never on every sync.
@@ -319,6 +398,10 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
     double? pricePerKm,
     List<String> riderIds, {
     bool fetchDetail = true,
+    double baseFare = 0,
+    double minDeliveryCharge = 0,
+    double pickDropCharge = 0,
+    Map<String, String> storesByDodooId = const {},
   }) async {
     if (orders.isEmpty) return 0;
 
@@ -342,42 +425,44 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
       }
 
       final data = full.toSupabaseOrder(
-          pricePerKm: pricePerKm, cityCodeOverride: city.code);
+          pricePerKm: pricePerKm,
+          baseFare: baseFare,
+          minDeliveryCharge: minDeliveryCharge,
+          pickDropCharge: pickDropCharge,
+          cityCodeOverride: city.code);
       // Only broadcast offers for orders that are actually open/pending;
       // orders DoDoo already has in-progress are imported but not re-offered.
-      final broadcastTo = data['status'] == 'pending' ? riderIds : const <String>[];
+      var broadcastTo = data['status'] == 'pending' ? riderIds : const <String>[];
+
+      // Model A: if this is a store order for a REGISTERED store, route it to
+      // the store first (placed → the store accepts/prepares/marks ready) —
+      // don't broadcast to riders yet. Non-store / unmatched orders are
+      // unchanged (broadcast straight to riders as today).
+      final dodooStoreId = (full.storeId ?? o.storeId ?? '').toString().trim();
+      final matchedStore = full.type == DodooOrderType.store
+          ? storesByDodooId[dodooStoreId]
+          : null;
+      if (matchedStore != null && matchedStore.isNotEmpty) {
+        data['store_id'] = matchedStore;
+        data['source'] = 'dodoo';
+        if (data['status'] == 'pending') {
+          data['status'] = 'placed'; // store handles it before riders
+          broadcastTo = const <String>[];
+        }
+      }
       await _admin.insertOrderWithOffers(data, broadcastTo);
     }
     return newOnes.length;
   }
 
-  /// Re-broadcasts pending orders that have gone unpicked for > [_unpickedMinutes]
-  /// and alerts the admin. Resetting status_updated_at throttles re-triggering.
+  /// Runs the fixed auto re-broadcast schedule (2 min then 5 min after the
+  /// first broadcast, then stops). Runs every minute so the thresholds fire on
+  /// time. After the schedule, only a manual re-broadcast re-sends an order.
   Future<void> _checkUnpicked() async {
     try {
-      final cutoff = DateTime.now()
-          .subtract(const Duration(minutes: _unpickedMinutes));
-      final list = await _admin.staleUnpickedOrders(cutoff);
-      if (list.isEmpty) {
-        if (_reboardedAlert != 0 && mounted) setState(() => _reboardedAlert = 0);
-        return;
-      }
-
-      // Re-broadcast each stale order to all approved riders.
       final riderIds = await _admin.approvedRiderIds();
-      for (final o in list) {
-        await _admin.reofferStale(o['id'].toString(), riderIds);
-      }
-
-      // Alert the admin (in-app banner + a local notification on mobile).
-      NotificationService.instance
-          .showApproval(
-            title: 'Unpicked orders re-broadcast',
-            body:
-                '${list.length} order(s) were not picked for $_unpickedMinutes min and were re-sent to riders.',
-          )
-          .ignore();
-      if (mounted) setState(() => _reboardedAlert = list.length);
+      final n = await _admin.runScheduledRebroadcasts(riderIds);
+      if (n > 0 && mounted) setState(() => _reboardedAlert = n);
     } catch (_) {
       // Best-effort — don't disrupt the list.
     }
@@ -537,7 +622,7 @@ class AdminOrdersTabState extends State<AdminOrdersTab> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '$_reboardedAlert order(s) went unpicked for $_unpickedMinutes min and were auto re-broadcast.',
+                      '$_reboardedAlert order(s) were auto re-broadcast to riders.',
                       style: const TextStyle(
                           fontSize: 12.5,
                           fontWeight: FontWeight.w600,

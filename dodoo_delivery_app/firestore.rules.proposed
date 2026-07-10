@@ -1,0 +1,157 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DoDoo Firestore rules — PROPOSED (enforces the profile-change approval gate)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ⚠️  PREREQUISITE — DO NOT DEPLOY AS-IS WHILE THE ADMIN APP IS ANONYMOUS.
+//
+// These rules add a real trust boundary between the ADMIN and everyone else by
+// checking `isAdmin()`. That check is only true for a *real* Firebase identity
+// (an email/password admin account, or a custom `admin` claim). The admin app
+// today signs in ANONYMOUSLY, so with these rules deployed it would be treated
+// as a normal rider and BLOCKED from approving riders, verifying documents,
+// approving withdrawals, editing settings, and approving profile changes.
+//
+// To deploy safely, the admin app must first authenticate with a real identity:
+//   Option A (free, recommended): create an admin user in Firebase Auth
+//     (Email/Password) and have the admin app call signInWithEmailAndPassword.
+//     Then set ADMIN_EMAIL below to that account's email.
+//   Option B (most robust): mint a custom `admin: true` claim on that account
+//     (one-off Admin SDK script — no Blaze needed). Then isAdmin() matches on
+//     the claim and you can ignore the email.
+//
+// Riders continue to use anonymous sessions — that's fine, because these rules
+// only need to distinguish "admin" from "not admin", not one rider from another.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// WHAT THESE RULES ENFORCE (beyond the current authenticated + no-delete baseline)
+//
+//  riders/{id}
+//   • Only an admin can change the LIVE identity fields (first_name, last_name,
+//     email, address, upi_number, aadhar_number, driving_license_number,
+//     profile_picture_url). A rider can only stage edits into
+//     `pending_profile_changes` — so a profile change takes effect ONLY after
+//     the admin approves it. This is the server-side half of the approval gate.
+//   • Only an admin can change account_status, is_verified, admin_comment or
+//     rating — so a rider can't self-approve their account or self-verify.
+//   • A rider may reset is_document_verified to false (needed when they
+//     re-upload a document), but only an admin can set it true.
+//
+//  withdrawal_requests/{id}  → riders create; only an admin can update (approve).
+//  app_settings/{id}         → only an admin can write (pricing, password, etc.).
+//
+// KNOWN GAPS (inherent to the current client-driven model; need Cloud Functions
+// on Blaze to close properly — intentionally NOT enforced here so existing
+// flows keep working):
+//   • wallet_balance / total_orders are still written by the RIDER app when a
+//     delivery completes (client-side crediting), so they stay client-writable.
+//   • document_status entries stay client-writable (the rider sets 'pending' on
+//     re-upload); the real verification gate (is_document_verified / is_verified
+//     → true, and account_status) is admin-only, which is what matters.
+//   • orders stay writable by any signed-in user (riders legitimately accept /
+//     advance orders; admin imports / broadcasts).
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // A real (non-anonymous) admin identity. Set ADMIN_EMAIL to the admin
+    // account's email, or grant an `admin: true` custom claim (either works).
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.token.email == 'REPLACE_WITH_ADMIN_EMAIL'
+      );
+    }
+
+    // Live rider fields only the admin may change. A rider edits these by
+    // staging them into `pending_profile_changes`; the admin approval copies
+    // them here.
+    function adminOnlyRiderFields() {
+      return [
+        'account_status', 'is_verified', 'admin_comment', 'rating',
+        'first_name', 'last_name', 'email', 'address', 'upi_number',
+        'aadhar_number', 'driving_license_number', 'profile_picture_url'
+      ];
+    }
+
+    function riderChangedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // A rider (non-admin) update is allowed only if it doesn't touch any
+    // admin-only field, and only flips is_document_verified to false (re-upload
+    // resets verification — turning it true is the admin's job).
+    function riderSelfUpdateOk() {
+      return !riderChangedKeys().hasAny(adminOnlyRiderFields())
+        && (
+          !riderChangedKeys().hasAny(['is_document_verified'])
+          || request.resource.data.is_document_verified == false
+        );
+    }
+
+    // ── Collections ──────────────────────────────────────────────────────────
+
+    // Re-broadcast clears & recreates offers, so deletes are allowed here.
+    match /order_offers/{id} {
+      allow read, write: if signedIn();
+    }
+
+    match /riders/{id} {
+      allow read: if signedIn();
+      // Registration: a new rider always starts unapproved, unverified and with
+      // a zero wallet — enforce that so a client can't self-register as an
+      // already-approved / funded account.
+      allow create: if signedIn()
+        && request.resource.data.account_status == 'pending'
+        && request.resource.data.is_verified == false
+        && request.resource.data.is_document_verified == false
+        && request.resource.data.wallet_balance == 0;
+      allow update: if signedIn() && (isAdmin() || riderSelfUpdateOk());
+      allow delete: if false;
+    }
+
+    match /orders/{id} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    // Riders submit withdrawal requests; only an admin can approve/modify them.
+    match /withdrawal_requests/{id} {
+      allow read, create: if signedIn();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /wallet_transactions/{id} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    match /rider_tracking/{id} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    // Pricing, offline-reminder timing, admin password, etc. — admin-writable
+    // only; readable by any signed-in client (the apps read settings).
+    match /app_settings/{id} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /support_tickets/{id} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    // Anything not matched above is denied by default.
+  }
+}

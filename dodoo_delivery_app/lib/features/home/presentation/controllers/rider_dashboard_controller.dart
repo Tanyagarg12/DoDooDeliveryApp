@@ -38,8 +38,8 @@ final themeModeProvider = StateProvider<bool>((_) => false); // false = light
 final selectedHomeTabProvider = StateProvider<int>((_) => 0);
 
 /// The city the rider is filtering offers by on the Orders → Offers tab.
-/// `null` means "All cities" (show every incoming request).
-final riderCityFilterProvider = StateProvider<String?>((_) => null);
+/// Defaults to Anantapur (ATP); `null` would mean "All cities".
+final riderCityFilterProvider = StateProvider<String?>((_) => 'ATP');
 
 // ── Controller ────────────────────────────────────────────────────────────────
 
@@ -61,6 +61,10 @@ class RiderDashboardController
   // Suppresses the alert chime on the very first dashboard load (existing
   // pending offers shouldn't sound like they just arrived).
   bool _firstDashboardLoad = true;
+  // Tracks the admin's note so a newly-arrived one notifies the rider once
+  // (the first load is silent so an existing note doesn't ping on app open).
+  String _lastAdminComment = '';
+  bool _sawFirstComment = false;
 
   Future<void> _start() async {
     // Defer first refresh past provider construction
@@ -195,6 +199,22 @@ class RiderDashboardController
         SoundService.instance.stopAlert().ignore();
       }
 
+      // Admin note → notify the rider when a new message arrives (once).
+      final newComment =
+          ((data['rider'] as Map?)?['admin_comment'] ?? '').toString().trim();
+      if (_sawFirstComment &&
+          newComment.isNotEmpty &&
+          newComment != _lastAdminComment) {
+        NotificationService.instance
+            .showSupportMessage(
+              title: 'Message from DoDoo',
+              body: newComment,
+            )
+            .ignore();
+      }
+      _sawFirstComment = true;
+      _lastAdminComment = newComment;
+
       state = state.copyWith(
         rider: Map<String, dynamic>.from(data['rider'] ?? state.rider),
         earnings: Map<String, dynamic>.from(data['earnings_summary'] ?? {}),
@@ -243,6 +263,14 @@ class RiderDashboardController
 
   Future<void> setStatus(String status) async {
     if (!mounted) return;
+    // A profile photo is mandatory before a rider can go online. (The UI routes
+    // them to Profile to add one; this is the enforcement backstop.)
+    if (status == 'online' && state.needsProfilePhoto) {
+      state = state.copyWith(
+        error: 'Add a profile photo before going online.',
+      );
+      return;
+    }
     // Status automation: while a delivery is active the rider is locked to
     // 'busy' and cannot manually switch. It returns to 'online' automatically
     // when the order completes (handled server-side in updateOrderStatus).

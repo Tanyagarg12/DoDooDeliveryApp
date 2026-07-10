@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/order_status.dart';
 import '../../../../core/firebase/admin_firestore_service.dart';
+import '../../../../core/utils/earning.dart';
 import '../../../../core/widgets/support_modal.dart';
 import '../../../orders_api/data/dodoo_order_api.dart';
 import 'admin_live_map_screen.dart';
@@ -87,18 +88,20 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
 
       final full = detail.toSupabaseOrder(
           cityCodeOverride: order['city_code']?.toString());
-      // Never overwrite our own workflow fields with the imported snapshot.
+      // Never overwrite our own workflow / earning fields with the imported
+      // snapshot — earning + distance were set at import with the per-km rate.
       full
         ..remove('status')
         ..remove('status_updated_at')
         ..remove('order_number')
-        ..remove('city_code');
-      // Don't clobber an earning we already set with a 0/empty one.
-      if ((full['total_earning'] == null ||
-              (full['total_earning'] as num?) == 0) &&
-          order['total_earning'] != null) {
-        full.remove('total_earning');
-      }
+        ..remove('city_code')
+        ..remove('total_earning')
+        ..remove('minimum_fare')
+        ..remove('distance_in_km')
+        ..remove('estimated_time_minutes')
+        ..remove('per_km_rate')
+        ..remove('base_fare')
+        ..remove('min_fare');
 
       await _admin.updateOrder(widget.orderId, full);
       return {...order, ...full};
@@ -392,9 +395,7 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
                             fontSize: 13.5, fontWeight: FontWeight.w800),
                       ),
                       Text(
-                        assignedId != null
-                            ? 'Rider earning'
-                            : 'No rider assigned yet',
+                        earningBreakdown(o),
                         style: TextStyle(
                             fontSize: 11, color: Colors.grey.shade600),
                       ),

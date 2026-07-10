@@ -13,6 +13,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 ///   rider_tracking/{riderId}         – live location (1 doc per rider)
 ///   app_settings/{key}               – admin-configurable settings
 ///   admins/{username}                – admin accounts
+///   stores/{storeId}                 – store/merchant profile, status, docs
 ///
 /// Use these getters everywhere instead of `FirebaseFirestore.instance
 /// .collection('...')` so collection names stay consistent.
@@ -44,4 +45,7 @@ class Db {
 
   static CollectionReference<Map<String, dynamic>> get admins =>
       instance.collection('admins');
+
+  static CollectionReference<Map<String, dynamic>> get stores =>
+      instance.collection('stores');
 }

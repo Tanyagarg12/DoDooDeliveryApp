@@ -161,6 +161,7 @@ class FirestoreService {
 
     double todayE = 0, weekE = 0, monthE = 0;
     int completedCount = 0;
+    int todayOrders = 0;
     for (final doc in historySnap.docs) {
       final d = _toMap(doc);
       if (d['status'] != 'completed') continue;
@@ -170,7 +171,10 @@ class FirestoreService {
       if (at == null) continue;
       if (!at.isBefore(monthStart)) monthE += amt;
       if (!at.isBefore(weekStart)) weekE += amt;
-      if (!at.isBefore(todayStart)) todayE += amt;
+      if (!at.isBefore(todayStart)) {
+        todayE += amt;
+        todayOrders++;
+      }
     }
 
     return {
@@ -183,6 +187,7 @@ class FirestoreService {
         'week': weekE,
         'month': monthE,
         'completed_orders': completedCount,
+        'today_orders': todayOrders,
       },
       'wallet': {'balance': rider['wallet_balance'] ?? 0},
       'withdrawal_requests': withdrawalSnap.docs.map(_toMap).toList(),

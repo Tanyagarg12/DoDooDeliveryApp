@@ -27,9 +27,12 @@ class DodooCity {
 class DodooCities {
   DodooCities._();
 
+  // NOTE: `code` must match DoDoo's LocationCode/CityCode exactly (used for
+  // order fetching + store City). Confirmed against GetOperatingLocations:
+  // Anantapur=ATP, Tadipatri=TDP, Kurnool=KRNT (NOT "KNL").
   static const List<DodooCity> all = [
     DodooCity(code: 'ATP', name: 'Anantapur', lat: 14.6819, lng: 77.6006),
-    DodooCity(code: 'KNL', name: 'Kurnool', lat: 15.8281, lng: 78.0373),
+    DodooCity(code: 'KRNT', name: 'Kurnool', lat: 15.8281, lng: 78.0373),
     DodooCity(code: 'TDP', name: 'Tadipatri', lat: 14.9091, lng: 78.0092),
   ];
 

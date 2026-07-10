@@ -195,9 +195,33 @@ class AdminFirestoreDataSource {
     String action, {
     String reason = '',
   }) async {
+    // Rejecting wipes the rider's details so a rejected rider starts over with
+    // a fresh application. The doc + phone are kept so they can log back in and
+    // re-apply; everything identifying/KYC is cleared.
+    if (action == 'reject') {
+      await Db.riders.doc(riderId).update({
+        'account_status': 'rejected',
+        'first_name': FieldValue.delete(),
+        'last_name': FieldValue.delete(),
+        'email': FieldValue.delete(),
+        'address': FieldValue.delete(),
+        'aadhar_number': FieldValue.delete(),
+        'driving_license_number': FieldValue.delete(),
+        'upi_number': FieldValue.delete(),
+        'profile_picture_url': FieldValue.delete(),
+        'aadhar_front_url': FieldValue.delete(),
+        'aadhar_back_url': FieldValue.delete(),
+        'driving_license_image_url': FieldValue.delete(),
+        'document_status': FieldValue.delete(),
+        'pending_profile_changes': FieldValue.delete(),
+        'admin_comment': FieldValue.delete(),
+        'is_verified': false,
+        'is_document_verified': false,
+      });
+      return;
+    }
     final newStatus = switch (action) {
       'approve'    => 'approved',
-      'reject'     => 'rejected',
       'suspend'    => 'suspended',
       'reactivate' => 'approved',
       _            => action,

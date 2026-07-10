@@ -194,20 +194,42 @@ class DodooOrder {
     return parts.join(' • ');
   }
 
+  /// Default order distance (km) used until DoDoo provides pickup/drop
+  /// coordinates. Rider earning is distance × per-km rate, so this drives it.
+  static const double _defaultDistanceKm = 2.0;
+
   /// Maps this external order onto our `orders` columns so it can be imported
   /// and run through the rider-offer workflow.
   ///
-  /// [pricePerKm] is a fallback fare when no price is present (distance × rate).
+  /// The rider's earning = [baseFare] + (order distance (km) × [pricePerKm]),
+  /// both set by the admin (per-km is per city, base is flat). Distance comes
+  /// from the pickup/drop coordinates when DoDoo sends them; until then it
+  /// defaults to [_defaultDistanceKm] (2 km). So once the API returns
+  /// coordinates, the km and earning update automatically — no code change.
   /// [cityCodeOverride] stamps the city the order was fetched for.
   Map<String, dynamic> toSupabaseOrder({
     double? pricePerKm,
+    double? baseFare,
+    double? minDeliveryCharge,
+    double? pickDropCharge,
     String? cityCodeOverride,
   }) {
-    final dist = _distanceKm();
-    var fare = earning ?? 0;
-    if (fare <= 0 && pricePerKm != null && dist != null) {
-      fare = double.parse((dist * pricePerKm).toStringAsFixed(2));
+    final dist = _distanceKm() ?? _defaultDistanceKm;
+    final rate = pricePerKm ?? 0;
+    final base = baseFare ?? 0;
+    final minFare = minDeliveryCharge ?? 0;
+    final pdpCharge = pickDropCharge ?? 0;
+
+    // Pick & Drop (PDP) orders pay a flat configured charge; store orders pay
+    // base + km×rate, never below the configured minimum delivery charge.
+    final double riderEarningRaw;
+    if (type == DodooOrderType.pickDrop) {
+      riderEarningRaw = pdpCharge;
+    } else {
+      final calc = base + dist * rate;
+      riderEarningRaw = calc < minFare ? minFare : calc;
     }
+    final riderEarning = double.parse(riderEarningRaw.toStringAsFixed(2));
     return {
       'order_number': orderId,
       'status': internalStatus,
@@ -224,11 +246,15 @@ class DodooOrder {
         'landmark_address': landmarkDropAddress,
       'to_latitude': dropLat,
       'to_longitude': dropLng,
-      if (dist != null) 'distance_in_km': double.parse(dist.toStringAsFixed(2)),
-      if (dist != null)
-        'estimated_time_minutes': (dist * 4).round().clamp(5, 240),
-      'total_earning': fare,
-      'minimum_fare': deliveryCharge ?? price ?? fare,
+      'distance_in_km': double.parse(dist.toStringAsFixed(2)),
+      'estimated_time_minutes': (dist * 4).round().clamp(5, 240),
+      // Rider earning (NOT DoDoo's charge). Store the inputs so the breakdown
+      // can be shown consistently (km×rate, base, min floor, PDP flat charge).
+      'per_km_rate': rate,
+      'base_fare': base,
+      'min_fare': minFare,
+      'total_earning': riderEarning,
+      'minimum_fare': riderEarning,
       // Full customer bill + breakdown, for the order detail screen.
       if (price != null) 'items_subtotal': price,
       if (totPrice != null) 'order_total': totPrice,
