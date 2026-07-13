@@ -91,12 +91,19 @@ class DodooOrderApi {
   /// order is recorded as "Deliver" (not "Completed").
   static String? dodooStatusFor(String internalStatus) {
     switch (internalStatus) {
+      // DoDoo's CUSTOMER notifications are keyed to these words, and DoDoo has
+      // them wired so:  "InProgress" => "…accepted, serving you soon"  and
+      // "Accept" => "…picked your order".  So we push the word that triggers
+      // the correct customer message:
+      //   rider ACCEPTED  -> push "InProgress"
+      //   rider PICKED UP -> push "Accept"
+      // (dodoo_order.dart#internalStatus mirrors this for re-import.)
       case 'accepted':
-        return 'Accept';
+        return 'InProgress';
       case 'picked_up':
       case 'in_transit':
       case 'reached':
-        return 'InProgress';
+        return 'Accept';
       case 'completed':
         return 'Deliver';
       case 'cancelled':
@@ -118,22 +125,33 @@ class DodooOrderApi {
   /// IMPORTANT: DoDoo expects the FULL, city-prefixed OrderID here (e.g.
   /// ATP_STOR…). The short form (STOR…) returns "Update Success" but is a
   /// silent no-op — it does NOT change the order. Best-effort: never throws.
-  Future<void> pushStatus({
+  /// Returns true only if DoDoo confirms the update (Status==1 / "success").
+  /// Never throws — callers may `.ignore()` the result for fire-and-forget.
+  Future<bool> pushStatus({
     required String orderNumber,
     required String internalStatus,
     String? orderType,
     String? riderId,
   }) async {
     final path = DodooApiConfig.statusUpdatePath;
-    if (path.isEmpty || orderNumber.isEmpty) return;
+    if (path.isEmpty || orderNumber.isEmpty) return false;
     final dodooStatus = dodooStatusFor(internalStatus);
-    if (dodooStatus == null) return;
+    if (dodooStatus == null) return false;
     final type = _typeSegment(orderNumber, orderType);
     try {
       // Full OrderID (with the city prefix) — this is what actually updates.
-      await _dio.get<dynamic>('$path/$type/$dodooStatus/$orderNumber');
+      final res = await _dio.get<dynamic>('$path/$type/$dodooStatus/$orderNumber');
+      final data = res.data;
+      if (data is Map) {
+        final status = data['Status']?.toString();
+        final result = (data['Result'] ?? '').toString().toLowerCase();
+        return status == '1' || result.contains('success');
+      }
+      // 2xx with a non-map body — treat as success.
+      return true;
     } catch (_) {
       // Best-effort — DoDoo sync failures must not break the app flow.
+      return false;
     }
   }
 

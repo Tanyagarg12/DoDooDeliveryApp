@@ -124,23 +124,34 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
     setState(() => _busy = true);
     try {
       await _admin.updateOrder(widget.orderId, patch);
-      // Push the status change back to DoDoo (no-op until endpoint configured).
+      // Push the status change back to DoDoo and CONFIRM it landed. We await it
+      // (with a timeout) so a manual status change actually reaches DoDoo and
+      // the admin sees whether it succeeded — instead of a silent no-op.
       final newStatus = patch['status']?.toString();
+      bool? dodooOk;
       if (newStatus != null) {
-        _dodoo
+        dodooOk = await _dodoo
             .pushStatus(
               orderNumber: _order?['order_number']?.toString() ?? '',
               internalStatus: newStatus,
               orderType: _order?['order_type']?.toString(),
               riderId: patch['assigned_rider_id']?.toString(),
             )
-            .ignore();
+            .timeout(const Duration(seconds: 15), onTimeout: () => false);
       }
       _changed = true;
       await _load();
       if (mounted) {
+        final msg = dodooOk == null
+            ? successMsg
+            : dodooOk
+                ? '$successMsg  •  DoDoo updated ✓'
+                : '$successMsg  •  saved locally, but DoDoo did NOT update';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(successMsg), backgroundColor: _teal),
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: dodooOk == false ? Colors.orange.shade800 : _teal,
+          ),
         );
       }
     } catch (e) {
@@ -444,20 +455,9 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
         ]),
         const SizedBox(height: 20),
 
-        // #6 — admin can set the order status directly (also pushed to DoDoo).
-        OutlinedButton.icon(
-          onPressed: _busy ? null : _changeStatus,
-          icon: const Icon(Icons.flag_rounded, size: 18),
-          label: const Text('Change order status'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: _teal,
-            side: const BorderSide(color: _teal),
-            minimumSize: const Size.fromHeight(48),
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        // Actions — only for orders that are still in progress.
+        // Actions — locked once the order is completed or cancelled.
+        // A finished order shows only the status banner; the admin cannot
+        // change its status, reassign, re-broadcast or cancel it.
         if (!canCancel)
           Container(
             width: double.infinity,
@@ -483,8 +483,8 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
                 Expanded(
                   child: Text(
                     status == 'completed'
-                        ? 'Completed — order delivered. No further action needed.'
-                        : 'This order is cancelled.',
+                        ? 'Completed — this order is locked and can no longer be changed.'
+                        : 'Cancelled — this order is locked and can no longer be changed.',
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w600),
                   ),
@@ -493,6 +493,18 @@ class _AdminOrderDetailScreenState extends State<AdminOrderDetailScreen> {
             ),
           )
         else ...[
+          // #6 — admin can set the order status directly (also pushed to DoDoo).
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _changeStatus,
+            icon: const Icon(Icons.flag_rounded, size: 18),
+            label: const Text('Change order status'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _teal,
+              side: const BorderSide(color: _teal),
+              minimumSize: const Size.fromHeight(48),
+            ),
+          ),
+          const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: _busy ? null : _reassign,
             icon: const Icon(Icons.person_search_rounded),

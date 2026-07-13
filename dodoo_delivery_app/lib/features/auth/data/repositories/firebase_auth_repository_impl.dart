@@ -30,6 +30,15 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
   // Held in memory between sendOtp and verifyOtp.
   String? _pendingOtp;
 
+  // ── Play Store REVIEW test login ───────────────────────────────────────────
+  // A fixed reviewer account so Google can sign in without a real SMS OTP.
+  // The reviewer types the 10-digit number 9035083483 (shown with +91), and the
+  // fixed OTP 1155. Everything is pinned to riders/919035083483 (approved).
+  static const String _reviewId = '919035083483';
+  static const String _reviewOtp = '1155';
+  bool _isReviewPhone(String digits) =>
+      digits == '919035083483' || digits == '9035083483';
+
   static String _digits(String phone) => phone.replaceAll(RegExp(r'[^0-9]'), '');
 
   /// Anonymous Firebase session so Firestore rules (`request.auth != null`) pass.
@@ -45,6 +54,15 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
   Future<CheckPhoneResult> checkPhone(String phone) async {
     await _ensureAnonSession();
     final id = _digits(phone);
+    // Reviewer test login — always treated as an existing, approved rider.
+    if (_isReviewPhone(id)) {
+      return const CheckPhoneResult(
+        exists: true,
+        phone: _reviewId,
+        accountStatus: AccountStatus.approved,
+        riderId: _reviewId,
+      );
+    }
     // This lookup is only an optimization (it decides the OTP-screen hint).
     // The OTP itself comes from the DoDoo HTTPS API, so a Firestore hiccup
     // (e.g. cloud_firestore/unavailable on a flaky network) must NOT block
@@ -69,6 +87,11 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
 
   @override
   Future<String> sendOtp(String phone) async {
+    // Reviewer test login — skip the SMS API, accept the fixed OTP.
+    if (_isReviewPhone(_digits(phone))) {
+      _pendingOtp = _reviewOtp;
+      return '';
+    }
     // DoDoo generates + SMSes the OTP and returns the code.
     final otp = await _dodoo.validateSignup(_digits(phone));
     if (otp == null || otp.isEmpty) {
@@ -84,6 +107,43 @@ class FirebaseAuthRepositoryImpl implements AuthRepository {
     required String phone,
     required String otp,
   }) async {
+    // Reviewer test login — fixed OTP, always lands in an approved account.
+    if (_isReviewPhone(_digits(phone))) {
+      if (otp.trim() != _reviewOtp) throw const UnauthorizedException();
+      await _ensureAnonSession();
+      RiderSession.riderId = _reviewId;
+      _pendingOtp = null;
+      // Ensure an APPROVED reviewer rider exists so they enter the app (not
+      // the pending-approval screen). Best-effort — if Firestore is down we
+      // still sign them in with a local approved profile below.
+      const reviewFields = <String, dynamic>{
+        'id': _reviewId,
+        'phone': _reviewId,
+        'first_name': 'Test',
+        'last_name': 'Reviewer',
+        'account_status': 'approved',
+        'current_status': 'offline',
+        'is_verified': true,
+        'is_document_verified': true,
+        'wallet_balance': 0,
+        'total_orders': 0,
+        'rating': 5.0,
+      };
+      Map<String, dynamic> data = reviewFields;
+      try {
+        await FirebaseFirestore.instance
+            .collection('riders')
+            .doc(_reviewId)
+            .set(reviewFields, SetOptions(merge: true));
+        final fetched = await _fs.getRider(_reviewId);
+        if (fetched != null && fetched.isNotEmpty) {
+          data = {...fetched, 'id': _reviewId, 'account_status': 'approved'};
+        }
+      } catch (_) {/* offline — fall back to the local approved profile */}
+      final rider = RiderModel.fromJson(data);
+      await _storage.saveRiderJson(rider.toJsonString());
+      return rider;
+    }
     if (_pendingOtp == null || otp.trim() != _pendingOtp) {
       throw const UnauthorizedException();
     }

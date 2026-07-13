@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/app_logo.dart';
+import '../../../../core/widgets/location_disclosure.dart';
 import '../../../../core/widgets/support_modal.dart';
 import '../../../auth/presentation/controllers/auth_controller.dart';
 import '../../../auth/presentation/screens/phone_input_screen.dart';
@@ -381,11 +382,15 @@ class _StatusCardState extends ConsumerState<_StatusCard>
 
   /// Goes online, but first requires a profile photo. A rider with no photo
   /// (and none pending) is sent to their Profile to add one instead.
-  void _goOnline(BuildContext context) {
+  Future<void> _goOnline(BuildContext context) async {
     if (widget.state.needsProfilePhoto) {
       _promptForPhoto(context);
       return;
     }
+    // Google Play "prominent disclosure" for background location — shown BEFORE
+    // the OS permission dialog. Only go online if the rider consents.
+    final consented = await ensureLocationDisclosure(context);
+    if (!consented) return;
     ref.read(riderDashboardProvider.notifier).setStatus('online');
   }
 
@@ -543,12 +548,13 @@ class _StatusChip extends StatelessWidget {
 
 // ── Today stats row ───────────────────────────────────────────────────────────
 
-class _TodayStatsRow extends StatelessWidget {
+class _TodayStatsRow extends ConsumerWidget {
   const _TodayStatsRow({required this.state});
   final RiderDashboardState state;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    void goTab(int i) => ref.read(selectedHomeTabProvider.notifier).state = i;
     return Row(
       children: [
         Expanded(
@@ -558,6 +564,7 @@ class _TodayStatsRow extends StatelessWidget {
             iconBg: AppColors.onlineBg,
             label: "Today's Earn",
             value: '₹${state.todayEarnings.toStringAsFixed(0)}',
+            onTap: () => goTab(3), // → Earnings tab
           ),
         ),
         const SizedBox(width: 10),
@@ -568,6 +575,7 @@ class _TodayStatsRow extends StatelessWidget {
             iconBg: AppColors.primaryContainer,
             label: "Today's Orders",
             value: '${state.todayOrders}',
+            onTap: () => goTab(2), // → History tab
           ),
         ),
         const SizedBox(width: 10),
@@ -578,6 +586,7 @@ class _TodayStatsRow extends StatelessWidget {
             iconBg: AppColors.amberContainer,
             label: 'Rating',
             value: state.rating.toStringAsFixed(1),
+            onTap: () => goTab(4), // → Profile tab
           ),
         ),
       ],
@@ -592,21 +601,23 @@ class _StatCard extends StatelessWidget {
     required this.iconBg,
     required this.label,
     required this.value,
+    this.onTap,
   });
   final IconData icon;
   final Color iconColor;
   final Color iconBg;
   final String label;
   final String value;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
+    // Canonical tappable card: outer Container = shadow/border, Material =
+    // surface colour + clip, InkWell = tap + visible ripple.
     return Container(
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: isDark
@@ -623,37 +634,58 @@ class _StatCard extends StatelessWidget {
                 ),
               ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: isDark ? iconColor.withValues(alpha: 0.15) : iconBg,
-              borderRadius: BorderRadius.circular(8),
+      child: Material(
+        color: isDark ? AppColors.cardDark : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? iconColor.withValues(alpha: 0.15)
+                            : iconBg,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(icon, size: 18, color: iconColor),
+                    ),
+                    const Spacer(),
+                    if (onTap != null)
+                      Icon(Icons.chevron_right_rounded,
+                          size: 16, color: cs.onSurfaceVariant),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurface,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: cs.onSurfaceVariant,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
-            child: Icon(icon, size: 18, color: iconColor),
           ),
-          const SizedBox(height: 10),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: cs.onSurface,
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: cs.onSurfaceVariant,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

@@ -278,7 +278,7 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
                     _SettingsTile(
                       icon: Icons.info_outline_rounded,
                       title: 'App Version',
-                      trailing: Text('v1.3.5',
+                      trailing: Text('v1.3.9',
                           style: TextStyle(
                               color: cs.onSurfaceVariant, fontSize: 13)),
                     ),

@@ -107,11 +107,14 @@ class DodooOrder {
   /// order shows its real state (not always "pending").
   String get internalStatus {
     switch ((status ?? '').toLowerCase()) {
+      // Mirror of DodooOrderApi.dodooStatusFor (kept in sync for round-trips):
+      //   DoDoo "InProgress" == our "accepted"   (rider accepted)
+      //   DoDoo "Accept"     == our "picked_up"  (rider picked up)
+      case 'inprogress':
+        return 'accepted';
       case 'accept':
       case 'accepted':
       case 'assigned':
-        return 'accepted';
-      case 'inprogress':
       case 'pickedup':
         return 'picked_up';
       case 'ongoing':

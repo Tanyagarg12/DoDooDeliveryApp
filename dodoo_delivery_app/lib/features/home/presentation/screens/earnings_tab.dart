@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/constants/payout_policy.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -18,18 +19,39 @@ class EarningsTab extends ConsumerStatefulWidget {
 }
 
 class _EarningsTabState extends ConsumerState<EarningsTab> {
+  static const _commissionPrefsKey = 'earnings_commission_dismissed';
   double? _totalEarnings;
+  bool _commissionDismissed = true; // hidden until we've checked prefs
 
   @override
   void initState() {
     super.initState();
     _loadTotal();
+    _loadCommissionFlag();
   }
 
   Future<void> _loadTotal() async {
     try {
       final total = await ref.read(riderApiProvider).totalEarnings();
       if (mounted) setState(() => _totalEarnings = total);
+    } catch (_) {/* best-effort */}
+  }
+
+  Future<void> _loadCommissionFlag() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final dismissed = prefs.getBool(_commissionPrefsKey) ?? false;
+      if (mounted) setState(() => _commissionDismissed = dismissed);
+    } catch (_) {
+      if (mounted) setState(() => _commissionDismissed = false);
+    }
+  }
+
+  Future<void> _dismissCommission() async {
+    setState(() => _commissionDismissed = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_commissionPrefsKey, true);
     } catch (_) {/* best-effort */}
   }
 
@@ -81,6 +103,12 @@ class _EarningsTabState extends ConsumerState<EarningsTab> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
+                  // ── 0% commission highlight (dismissible) ─────────────────
+                  if (!_commissionDismissed) ...[
+                    _CommissionHighlight(onClose: _dismissCommission),
+                    const SizedBox(height: 14),
+                  ],
+
                   // ── Wallet card ───────────────────────────────────────────
                   FadeIn(child: _WalletCard(state: state, isDark: isDark)),
                   const SizedBox(height: 16),
@@ -168,6 +196,50 @@ class _EarningsTabState extends ConsumerState<EarningsTab> {
         );
       }
     }
+  }
+}
+
+// ── 0% commission highlight (small, dismissible) ────────────────────────────
+
+class _CommissionHighlight extends StatelessWidget {
+  const _CommissionHighlight({required this.onClose});
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B8043).withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF0B8043).withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.savings_rounded, size: 18, color: Color(0xFF0B8043)),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              '0% commission — you keep 100% of every rupee you earn.',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF0B8043),
+              ),
+            ),
+          ),
+          InkWell(
+            onTap: onClose,
+            borderRadius: BorderRadius.circular(20),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.close_rounded,
+                  size: 16, color: Color(0xFF0B8043)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

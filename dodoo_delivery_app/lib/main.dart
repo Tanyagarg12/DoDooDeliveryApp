@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
 import 'core/api/rider_firestore_api.dart';
 import 'core/theme/app_theme.dart';
+import 'core/widgets/scooter_loader.dart';
 import 'features/auth/domain/entities/rider_entity.dart';
 import 'features/auth/presentation/controllers/auth_controller.dart';
 import 'features/auth/presentation/screens/account_status_screen.dart';
@@ -91,11 +92,18 @@ class _RiderGateState extends ConsumerState<_RiderGate> {
   }
 
   Future<void> _restore() async {
+    final started = DateTime.now();
     RiderEntity? rider;
     try {
       rider = await ref.read(authRepositoryProvider).restoreSession();
     } catch (_) {
       rider = null;
+    }
+    // Keep the scooter splash on screen long enough to be seen.
+    const minSplash = Duration(milliseconds: 1600);
+    final elapsed = DateTime.now().difference(started);
+    if (elapsed < minSplash) {
+      await Future.delayed(minSplash - elapsed);
     }
     if (!mounted) return;
     setState(() {
@@ -109,7 +117,7 @@ class _RiderGateState extends ConsumerState<_RiderGate> {
     if (_checking) {
       return const Scaffold(
         backgroundColor: AppColors.bgLight,
-        body: Center(child: CircularProgressIndicator()),
+        body: Center(child: ScooterLoader(message: 'Getting things ready…')),
       );
     }
     final rider = _rider;

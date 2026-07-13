@@ -6,10 +6,11 @@ import 'package:flutter/material.dart';
 /// `in_transit`, `reached`, `completed`, `cancelled`) are presented in the admin
 /// as these sections:
 ///
-///   • Ongoing    (pending)                              – waiting for a rider
-///   • InProgress (accepted/picked_up/in_transit)        – a rider is on it
-///   • Completed  (completed = DoDoo "Deliver")          – delivered
-///   • Cancel     (cancelled)                            – cancelled
+///   • Ongoing     (pending)                       – waiting for a rider
+///   • Accept      (accepted)                      – a rider accepted the order
+///   • In Progress (picked_up/in_transit/reached)  – rider on the way to customer
+///   • Completed   (completed = DoDoo "Deliver")   – delivered
+///   • Cancel      (cancelled)                     – cancelled
 ///
 /// This is the single source of truth for the label, description and colour of
 /// each status across the admin screens.
@@ -48,20 +49,20 @@ class AdminOrderStatus {
     Color(0xFFD97706),
     ['pending'],
   );
-  // A rider who has accepted (but not yet picked up) is "in progress".
-  static const inProgress = AdminOrderStatus._(
-    'inprogress',
-    'InProgress',
-    'Accepted by a rider',
-    Color(0xFF7C3AED),
-    ['accepted'],
-  );
-  // Once the rider has picked the order up, it shows under "Accept".
+  // Rider ACCEPTED the order — shown under the "In Progress" section.
   static const accept = AdminOrderStatus._(
     'accept',
+    'In Progress',
+    'Accepted — serving you soon',
+    Color(0xFF2563EB),
+    ['accepted'],
+  );
+  // Rider PICKED UP the order — shown under the "Accept" section.
+  static const inProgress = AdminOrderStatus._(
+    'inprogress',
     'Accept',
     'Picked up by the rider',
-    Color(0xFF2563EB),
+    Color(0xFF7C3AED),
     ['picked_up', 'in_transit', 'reached'],
   );
   static const completed = AdminOrderStatus._(
@@ -80,10 +81,12 @@ class AdminOrderStatus {
   );
 
   /// All statuses, in the order the admin sees them.
+  // UI display order only (does not affect status logic):
+  // Ongoing → In Progress (accepted) → Accept (picked up) → Completed → Cancel
   static const List<AdminOrderStatus> all = [
     ongoing,
-    inProgress,
-    accept,
+    accept, // label "In Progress" — accepted orders
+    inProgress, // label "Accept" — picked-up orders
     completed,
     cancelled,
   ];
